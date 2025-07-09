@@ -1,0 +1,5 @@
+name: ConfigInjector
+version: '${version}'
+main: fr.mediavee.configinjector.ConfigInjector
+api-version: '1.20'
+load: STARTUP

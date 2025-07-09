@@ -1,0 +1,63 @@
+# Supported formats:
+# - YAML (.yml, .yaml)
+# - JSON (.json)  
+# - Properties (.properties)
+# - TOML (.toml)
+#
+# Environment variable syntax:
+# ${VAR_NAME} - Variable without default (empty if missing, error if stop-on-missing-required=true)
+# ${VAR_NAME:default_value} - Variable with default value
+# ${VAR_NAME:} - Variable with empty default (no error even if stop-on-missing-required=true)
+
+# If true (default), the server stops if a required environment variable is missing
+# If false, continues with empty values for missing variables
+stop-on-missing-required: true
+
+# If true, the server stops in case of configuration errors (file not found, invalid format, etc.)
+# If false (default), continues despite errors
+stop-on-error: true
+
+replacements:
+  - file: "plugins/plugin/config.yml"
+    changes:
+      - path: "database.host"
+        value: "${DB_HOST:localhost}"
+      - path: "database.port"
+        value: "${DB_PORT:3306}"
+      - path: "database.username"
+        value: "${DB_USER:admin}"
+      - path: "database.password"
+        value: "${DB_PASSWORD:}"
+      - path: "settings.debug"
+        value: "${DEBUG_MODE:false}"
+      - path: "settings.env"
+        value: "${ENVIRONMENT}"
+
+  - file: "plugins/plugin/settings.json"
+    changes:
+      - path: "api.key"
+        value: "${API_KEY:}"
+      - path: "server.url"
+        value: "${SERVER_URL:http://localhost:8080}"
+      - path: "cache.enabled"
+        value: "${CACHE_ENABLED:true}"
+      - path: "cache.ttl"
+        value: "${CACHE_TTL:300}"
+
+  - file: "plugins/plugin/config.properties"
+    changes:
+      - path: "jdbc.url"
+        value: "${JDBC_URL:jdbc:mysql://localhost:3306/mydb}"
+      - path: "jdbc.username"
+        value: "${JDBC_USER:root}"
+      - path: "jdbc.password"
+        value: "${JDBC_PASSWORD:}"
+
+  - file: "plugins/plugin/config.toml"
+    changes:
+      - path: "server.host"
+        value: "${SERVER_HOST:0.0.0.0}"
+      - path: "server.port"
+        value: "${SERVER_PORT:8080}"
+      - path: "database.url"
+        value: "${DATABASE_URL}"
