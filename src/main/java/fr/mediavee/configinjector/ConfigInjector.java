@@ -16,8 +16,8 @@ import java.util.logging.Level;
 
 public final class ConfigInjector extends JavaPlugin {
 
-    private boolean stopOnMissingRequired;
-    private boolean stopOnError;
+    private final boolean stopOnMissingRequired;
+    private final boolean stopOnError;
 
     public ConfigInjector() {
         super();
