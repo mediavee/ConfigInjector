@@ -16,7 +16,7 @@ public abstract class AbstractFileProcessor implements FileProcessor {
         if (value == null) return null;
         
         Matcher matcher = ENV_VAR_PATTERN.matcher(value);
-        StringBuffer result = new StringBuffer();
+        StringBuilder result = new StringBuilder();
         
         while (matcher.find()) {
             String envVar = matcher.group(1);

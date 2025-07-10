@@ -43,7 +43,10 @@ class TomlFileProcessorTest {
     @Test
     void testProcessFile_simpleValue() throws Exception {
         // Create initial TOML file
-        String initialContent = "host = \"localhost\"\nport = 3306\n";
+        String initialContent = """
+            host = "localhost"
+            port = 3306
+            """;
         Files.write(testFile, initialContent.getBytes());
 
         // Create changes
@@ -65,7 +68,14 @@ class TomlFileProcessorTest {
     @Test
     void testProcessFile_nestedValues() throws Exception {
         // Create initial TOML file
-        String initialContent = "[database]\nhost = \"localhost\"\nport = 3306\n\n[cache]\nenabled = true\n";
+        String initialContent = """
+            [database]
+            host = "localhost"
+            port = 3306
+            
+            [cache]
+            enabled = true
+            """;
         Files.write(testFile, initialContent.getBytes());
 
         // Create changes
@@ -93,7 +103,9 @@ class TomlFileProcessorTest {
         assertNotNull(homeValue, "HOME environment variable should be set for this test");
 
         // Create initial TOML file
-        String initialContent = "path = \"/default/path\"\n";
+        String initialContent = """
+            path = "/default/path"
+            """;
         Files.write(testFile, initialContent.getBytes());
 
         // Create changes with environment variables
@@ -135,7 +147,9 @@ class TomlFileProcessorTest {
     @Test
     void testProcessFile_allValueTypes() throws Exception {
         // Create initial TOML file
-        String initialContent = "string_val = \"text\"\n";
+        String initialContent = """
+            string_val = "text"
+            """;
         Files.write(testFile, initialContent.getBytes());
 
         // Create changes with different types

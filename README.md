@@ -111,4 +111,4 @@ jdbc.password=${JDBC_PASSWORD:}
 
 - **Minecraft**: 1.8.9+
 - **Servers**: Bukkit, Spigot, Paper
-- **Java**: 8+
+- **Java**: 21+

@@ -72,15 +72,17 @@ class ConfigInjectorIntegrationTest {
         
         writeYamlFile(yamlFile, initialData);
 
-        String configContent = "replacements:\n" +
-            "  - file: \"plugins/TestPlugin1/config.yml\"\n" +
-            "    changes:\n" +
-            "      - path: \"simple\"\n" +
-            "        value: \"${HOME:fallback}_modified\"\n" +
-            "      - path: \"with_default\"\n" +
-            "        value: \"${UNDEFINED:default_value}\"\n" +
-            "      - path: \"empty_default\"\n" +
-            "        value: \"${EMPTY_VAR:}\"\n";
+        String configContent = """
+            replacements:
+              - file: "plugins/TestPlugin1/config.yml"
+                changes:
+                  - path: "simple"
+                    value: "${HOME:fallback}_modified"
+                  - path: "with_default"
+                    value: "${UNDEFINED:default_value}"
+                  - path: "empty_default"
+                    value: "${EMPTY_VAR:}"
+            """;
 
         Yaml yaml = new Yaml();
         Map<String, Object> config = yaml.load(configContent);
@@ -99,17 +101,19 @@ class ConfigInjectorIntegrationTest {
         JsonObject initialData = new JsonObject();
         writeJsonFile(jsonFile, initialData);
 
-        String configContent = "replacements:\n" +
-            "  - file: \"plugins/TestPlugin2/config.json\"\n" +
-            "    changes:\n" +
-            "      - path: \"database.connection.host\"\n" +
-            "        value: \"localhost\"\n" +
-            "      - path: \"database.connection.port\"\n" +
-            "        value: \"3306\"\n" +
-            "      - path: \"features.cache.enabled\"\n" +
-            "        value: \"true\"\n" +
-            "      - path: \"features.cache.size\"\n" +
-            "        value: \"100\"\n";
+        String configContent = """
+            replacements:
+              - file: "plugins/TestPlugin2/config.json"
+                changes:
+                  - path: "database.connection.host"
+                    value: "localhost"
+                  - path: "database.connection.port"
+                    value: "3306"
+                  - path: "features.cache.enabled"
+                    value: "true"
+                  - path: "features.cache.size"
+                    value: "100"
+            """;
 
         Yaml yaml = new Yaml();
         Map<String, Object> config = yaml.load(configContent);
@@ -152,27 +156,29 @@ class ConfigInjectorIntegrationTest {
     }
 
     private String createEnvReplacerConfig() {
-        return "replacements:\n" +
-            "  - file: \"plugins/TestPlugin1/config.yml\"\n" +
-            "    changes:\n" +
-            "      - path: \"host\"\n" +
-            "        value: \"${HOME:localhost}\"\n" +
-            "      - path: \"port\"\n" +
-            "        value: \"${PORT:5432}\"\n" +
-            "        \n" +
-            "  - file: \"plugins/TestPlugin2/settings.json\"\n" +
-            "    changes:\n" +
-            "      - path: \"api_key\"\n" +
-            "        value: \"${API_KEY:default-key}\"\n" +
-            "      - path: \"cache_size\"\n" +
-            "        value: \"${CACHE_SIZE:1000}\"\n" +
-            "        \n" +
-            "  - file: \"plugins/TestPlugin3/config.properties\"\n" +
-            "    changes:\n" +
-            "      - path: \"database.url\"\n" +
-            "        value: \"jdbc:postgresql://localhost:5432/proddb\"\n" +
-            "      - path: \"pool.size\"\n" +
-            "        value: \"20\"\n";
+        return """
+            replacements:
+              - file: "plugins/TestPlugin1/config.yml"
+                changes:
+                  - path: "host"
+                    value: "${HOME:localhost}"
+                  - path: "port"
+                    value: "${PORT:5432}"
+                    
+              - file: "plugins/TestPlugin2/settings.json"
+                changes:
+                  - path: "api_key"
+                    value: "${API_KEY:default-key}"
+                  - path: "cache_size"
+                    value: "${CACHE_SIZE:1000}"
+                    
+              - file: "plugins/TestPlugin3/config.properties"
+                changes:
+                  - path: "database.url"
+                    value: "jdbc:postgresql://localhost:5432/proddb"
+                  - path: "pool.size"
+                    value: "20"
+            """;
     }
 
     private void processConfigReplacements(Map<String, Object> config) throws Exception {

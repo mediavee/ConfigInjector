@@ -62,7 +62,7 @@ public class YamlFileProcessor extends AbstractFileProcessor {
             options.setPrettyFlow(true);
             Yaml outputYaml = new Yaml(options);
             
-            try (FileWriter writer = new FileWriter(filePath.toFile())) {
+            try (BufferedWriter writer = Files.newBufferedWriter(filePath)) {
                 outputYaml.dump(data, writer);
             }
         }

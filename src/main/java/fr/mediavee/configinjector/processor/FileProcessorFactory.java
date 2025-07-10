@@ -1,11 +1,10 @@
 package fr.mediavee.configinjector.processor;
 
-import java.util.Arrays;
 import java.util.List;
 
 public class FileProcessorFactory {
     
-    private static final List<FileProcessor> PROCESSORS = Arrays.asList(
+    private static final List<FileProcessor> PROCESSORS = List.of(
         new YamlFileProcessor(),
         new JsonFileProcessor(),
         new PropertiesFileProcessor(),
