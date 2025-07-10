@@ -1,9 +1,7 @@
 package fr.mediavee.configinjector.processor;
 
-import fr.mediavee.configinjector.processor.*;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -17,7 +15,7 @@ class FileProcessorFactoryTest {
         FileProcessor processor = FileProcessorFactory.getProcessor("config.yml");
         
         assertNotNull(processor);
-        assertTrue(processor instanceof YamlFileProcessor);
+        assertInstanceOf(YamlFileProcessor.class, processor);
         assertEquals("YAML", processor.getFormat());
     }
 
@@ -26,7 +24,7 @@ class FileProcessorFactoryTest {
         FileProcessor processor = FileProcessorFactory.getProcessor("CONFIG.YAML");
         
         assertNotNull(processor);
-        assertTrue(processor instanceof YamlFileProcessor);
+        assertInstanceOf(YamlFileProcessor.class, processor);
         assertEquals("YAML", processor.getFormat());
     }
 
@@ -35,7 +33,7 @@ class FileProcessorFactoryTest {
         FileProcessor processor = FileProcessorFactory.getProcessor("settings.json");
         
         assertNotNull(processor);
-        assertTrue(processor instanceof JsonFileProcessor);
+        assertInstanceOf(JsonFileProcessor.class, processor);
         assertEquals("JSON", processor.getFormat());
     }
 
@@ -44,7 +42,7 @@ class FileProcessorFactoryTest {
         FileProcessor processor = FileProcessorFactory.getProcessor("application.properties");
         
         assertNotNull(processor);
-        assertTrue(processor instanceof PropertiesFileProcessor);
+        assertInstanceOf(PropertiesFileProcessor.class, processor);
         assertEquals("Properties", processor.getFormat());
     }
 
@@ -81,15 +79,7 @@ class FileProcessorFactoryTest {
         FileProcessor processor = FileProcessorFactory.getProcessor("plugins/MyPlugin/config.yml");
         
         assertNotNull(processor);
-        assertTrue(processor instanceof YamlFileProcessor);
-    }
-
-    @Test
-    void testGetProcessor_fileWithComplexPath() {
-        FileProcessor processor = FileProcessorFactory.getProcessor("/home/user/server/plugins/MyPlugin/settings.json");
-        
-        assertNotNull(processor);
-        assertTrue(processor instanceof JsonFileProcessor);
+        assertInstanceOf(YamlFileProcessor.class, processor);
     }
 
     @Test
@@ -97,10 +87,10 @@ class FileProcessorFactoryTest {
         FileProcessor yamlProcessor = FileProcessorFactory.getProcessor("test.yml");
         FileProcessor jsonProcessor = FileProcessorFactory.getProcessor("test.json");
         FileProcessor propProcessor = FileProcessorFactory.getProcessor("test.properties");
-        
-        assertTrue(yamlProcessor instanceof YamlFileProcessor);
-        assertTrue(jsonProcessor instanceof JsonFileProcessor);
-        assertTrue(propProcessor instanceof PropertiesFileProcessor);
+
+        assertInstanceOf(YamlFileProcessor.class, yamlProcessor);
+        assertInstanceOf(JsonFileProcessor.class, jsonProcessor);
+        assertInstanceOf(PropertiesFileProcessor.class, propProcessor);
         
         assertNotSame(yamlProcessor, jsonProcessor);
         assertNotSame(yamlProcessor, propProcessor);

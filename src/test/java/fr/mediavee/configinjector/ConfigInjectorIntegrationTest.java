@@ -34,9 +34,9 @@ class ConfigInjectorIntegrationTest {
         Files.createDirectories(pluginsDir);
         
         // Create plugin directories
-        Files.createDirectories(pluginsDir.resolve("TestPlugin"));
-        Files.createDirectories(pluginsDir.resolve("ModernPlugin"));
-        Files.createDirectories(pluginsDir.resolve("LegacyPlugin"));
+        Files.createDirectories(pluginsDir.resolve("TestPlugin1"));
+        Files.createDirectories(pluginsDir.resolve("TestPlugin2"));
+        Files.createDirectories(pluginsDir.resolve("TestPlugin3"));
     }
 
     @Test
@@ -58,14 +58,14 @@ class ConfigInjectorIntegrationTest {
         processConfigReplacements(config);
 
         // Verify files were updated (simplified verification)
-        assertTrue(Files.exists(pluginsDir.resolve("TestPlugin").resolve("config.yml")));
-        assertTrue(Files.exists(pluginsDir.resolve("ModernPlugin").resolve("settings.json")));
-        assertTrue(Files.exists(pluginsDir.resolve("LegacyPlugin").resolve("config.properties")));
+        assertTrue(Files.exists(pluginsDir.resolve("TestPlugin1").resolve("config.yml")));
+        assertTrue(Files.exists(pluginsDir.resolve("TestPlugin2").resolve("settings.json")));
+        assertTrue(Files.exists(pluginsDir.resolve("TestPlugin3").resolve("config.properties")));
     }
 
     @Test
     void testEnvironmentVariableSubstitution() throws Exception {
-        Path yamlFile = pluginsDir.resolve("TestPlugin").resolve("config.yml");
+        Path yamlFile = pluginsDir.resolve("TestPlugin1").resolve("config.yml");
         
         Map<String, Object> initialData = new HashMap<>();
         initialData.put("simple", "old_value");
@@ -73,7 +73,7 @@ class ConfigInjectorIntegrationTest {
         writeYamlFile(yamlFile, initialData);
 
         String configContent = "replacements:\n" +
-            "  - file: \"plugins/TestPlugin/config.yml\"\n" +
+            "  - file: \"plugins/TestPlugin1/config.yml\"\n" +
             "    changes:\n" +
             "      - path: \"simple\"\n" +
             "        value: \"${HOME:fallback}_modified\"\n" +
@@ -94,13 +94,13 @@ class ConfigInjectorIntegrationTest {
 
     @Test
     void testNestedPathProcessing() throws Exception {
-        Path jsonFile = pluginsDir.resolve("ModernPlugin").resolve("config.json");
+        Path jsonFile = pluginsDir.resolve("TestPlugin2").resolve("config.json");
         
         JsonObject initialData = new JsonObject();
         writeJsonFile(jsonFile, initialData);
 
         String configContent = "replacements:\n" +
-            "  - file: \"plugins/ModernPlugin/config.json\"\n" +
+            "  - file: \"plugins/TestPlugin2/config.json\"\n" +
             "    changes:\n" +
             "      - path: \"database.connection.host\"\n" +
             "        value: \"localhost\"\n" +
@@ -128,7 +128,7 @@ class ConfigInjectorIntegrationTest {
     }
 
     private void createYamlTestFile() throws IOException {
-        Path yamlFile = pluginsDir.resolve("TestPlugin").resolve("config.yml");
+        Path yamlFile = pluginsDir.resolve("TestPlugin1").resolve("config.yml");
         Map<String, Object> data = new HashMap<>();
         data.put("host", "localhost");
         data.put("port", 3306);
@@ -136,7 +136,7 @@ class ConfigInjectorIntegrationTest {
     }
 
     private void createJsonTestFile() throws IOException {
-        Path jsonFile = pluginsDir.resolve("ModernPlugin").resolve("settings.json");
+        Path jsonFile = pluginsDir.resolve("TestPlugin2").resolve("settings.json");
         JsonObject data = new JsonObject();
         data.addProperty("api_key", "default_key");
         data.addProperty("cache_size", 500);
@@ -144,7 +144,7 @@ class ConfigInjectorIntegrationTest {
     }
 
     private void createPropertiesTestFile() throws IOException {
-        Path propertiesFile = pluginsDir.resolve("LegacyPlugin").resolve("config.properties");
+        Path propertiesFile = pluginsDir.resolve("TestPlugin3").resolve("config.properties");
         Properties data = new Properties();
         data.setProperty("database.url", "jdbc:mysql://localhost:3306/test");
         data.setProperty("pool.size", "10");
@@ -153,21 +153,21 @@ class ConfigInjectorIntegrationTest {
 
     private String createEnvReplacerConfig() {
         return "replacements:\n" +
-            "  - file: \"plugins/TestPlugin/config.yml\"\n" +
+            "  - file: \"plugins/TestPlugin1/config.yml\"\n" +
             "    changes:\n" +
             "      - path: \"host\"\n" +
             "        value: \"${HOME:localhost}\"\n" +
             "      - path: \"port\"\n" +
             "        value: \"${PORT:5432}\"\n" +
             "        \n" +
-            "  - file: \"plugins/ModernPlugin/settings.json\"\n" +
+            "  - file: \"plugins/TestPlugin2/settings.json\"\n" +
             "    changes:\n" +
             "      - path: \"api_key\"\n" +
             "        value: \"${API_KEY:default-key}\"\n" +
             "      - path: \"cache_size\"\n" +
             "        value: \"${CACHE_SIZE:1000}\"\n" +
             "        \n" +
-            "  - file: \"plugins/LegacyPlugin/config.properties\"\n" +
+            "  - file: \"plugins/TestPlugin3/config.properties\"\n" +
             "    changes:\n" +
             "      - path: \"database.url\"\n" +
             "        value: \"jdbc:postgresql://localhost:5432/proddb\"\n" +
@@ -201,10 +201,7 @@ class ConfigInjectorIntegrationTest {
         }
 
         FileProcessor processor = FileProcessorFactory.getProcessor(filePath);
-        
-        if (processor != null) {
-            processor.processFile(fullPath, changes);
-        }
+        processor.processFile(fullPath, changes);
     }
 
 
