@@ -58,17 +58,28 @@ processResources {
 }
 
 shadowJar {
-    archiveClassifier.set('')
-
     enableRelocation = true
     relocationPrefix = group + '.' + project.name + '.libs'
 }
 
 jar {
     dependsOn shadowJar
-    archiveClassifier.set('original')
 }
 
 build {
     dependsOn shadowJar
+    finalizedBy 'copyToTarget'
+}
+
+clean {
+    delete "$rootDir/target"
+}
+
+tasks.register('copyToTarget', Copy) {
+    dependsOn shadowJar
+    from(shadowJar.archiveFile)
+    into("$rootDir/target")
+    rename { fileName ->
+        return "${project.name}-${version}.jar"
+    }
 }
