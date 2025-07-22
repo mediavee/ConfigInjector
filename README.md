@@ -31,5 +31,5 @@ replacements:
 ## Compatibility
 
 - Minecraft 1.8.9+
-- Java 21+
+- Java 17+
 - Bukkit, Spigot, Paper
