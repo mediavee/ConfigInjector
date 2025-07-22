@@ -1,5 +1,6 @@
 package fr.mediavee.configinjector;
 
+import fr.mediavee.configinjector.exception.MissingRequiredVariableException;
 import fr.mediavee.configinjector.processor.FileProcessor;
 import fr.mediavee.configinjector.processor.FileProcessorFactory;
 import fr.mediavee.configinjector.processor.AbstractFileProcessor.RequiredVariableValidator;

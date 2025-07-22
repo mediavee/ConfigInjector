@@ -1,4 +1,4 @@
-package fr.mediavee.configinjector;
+package fr.mediavee.configinjector.exception;
 
 import java.util.ArrayList;
 import java.util.List;

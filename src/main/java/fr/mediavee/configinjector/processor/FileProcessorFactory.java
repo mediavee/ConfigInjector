@@ -1,5 +1,10 @@
 package fr.mediavee.configinjector.processor;
 
+import fr.mediavee.configinjector.processor.impl.JsonFileProcessor;
+import fr.mediavee.configinjector.processor.impl.PropertiesFileProcessor;
+import fr.mediavee.configinjector.processor.impl.TomlFileProcessor;
+import fr.mediavee.configinjector.processor.impl.YamlFileProcessor;
+
 import java.util.List;
 
 public class FileProcessorFactory {

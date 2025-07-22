@@ -1,25 +1,26 @@
-package fr.mediavee.configinjector.processor;
+package fr.mediavee.configinjector.processor.impl;
 
-import com.moandjiezana.toml.Toml;
-import com.moandjiezana.toml.TomlWriter;
+import com.google.gson.*;
+import fr.mediavee.configinjector.processor.AbstractFileProcessor;
 
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class TomlFileProcessor extends AbstractFileProcessor {
+public class JsonFileProcessor extends AbstractFileProcessor {
+    
+    private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
     
     @Override
     public boolean canProcess(String fileName) {
-        return fileName.toLowerCase().endsWith(".toml");
+        return fileName.toLowerCase().endsWith(".json");
     }
     
     @Override
     public String getFormat() {
-        return "TOML";
+        return "JSON";
     }
     
     @Override
@@ -29,13 +30,15 @@ public class TomlFileProcessor extends AbstractFileProcessor {
     
     @Override
     public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
-        Map<String, Object> data;
+        JsonObject data;
         
         if (Files.exists(filePath)) {
-            Toml toml = new Toml().read(filePath.toFile());
-            data = toml.toMap();
+            try (Reader reader = Files.newBufferedReader(filePath)) {
+                JsonParser parser = new JsonParser();
+                data = parser.parse(reader).getAsJsonObject();
+            }
         } else {
-            data = new HashMap<>();
+            data = new JsonObject();
         }
         
         boolean modified = false;
@@ -51,35 +54,37 @@ public class TomlFileProcessor extends AbstractFileProcessor {
         }
         
         if (modified) {
-            TomlWriter writer = new TomlWriter();
-            writer.write(data, filePath.toFile());
+            try (Writer writer = Files.newBufferedWriter(filePath)) {
+                gson.toJson(data, writer);
+            }
         }
         
         return modified;
     }
     
-    @SuppressWarnings("unchecked")
-    private boolean setNestedValue(Map<String, Object> data, String path, String value) {
+    private boolean setNestedValue(JsonObject data, String path, String value) {
         String[] keys = path.split("\\.");
-        Map<String, Object> current = data;
+        JsonObject current = data;
         
         for (int i = 0; i < keys.length - 1; i++) {
             String key = keys[i];
-            Object next = current.get(key);
+            JsonElement element = current.get(key);
             
-            if (next instanceof Map) {
-                current = (Map<String, Object>) next;
+            if (element != null && element.isJsonObject()) {
+                current = element.getAsJsonObject();
             } else {
-                Map<String, Object> newMap = new HashMap<>();
-                current.put(key, newMap);
-                current = newMap;
+                JsonObject newObject = new JsonObject();
+                current.add(key, newObject);
+                current = newObject;
             }
         }
         
         String finalKey = keys[keys.length - 1];
-        Object oldValue = current.get(finalKey);
+        JsonElement oldValue = current.get(finalKey);
+        JsonElement newValue = new JsonPrimitive(value);
         
-        current.put(finalKey, value);
-        return !value.equals(oldValue);
+        current.add(finalKey, newValue);
+        return !newValue.equals(oldValue);
     }
+    
 }

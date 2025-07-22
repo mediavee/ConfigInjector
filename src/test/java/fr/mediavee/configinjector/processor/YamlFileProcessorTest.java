@@ -1,5 +1,6 @@
 package fr.mediavee.configinjector.processor;
 
+import fr.mediavee.configinjector.processor.impl.YamlFileProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

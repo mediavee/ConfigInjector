@@ -1,6 +1,7 @@
 package fr.mediavee.configinjector.processor;
 
 import com.moandjiezana.toml.Toml;
+import fr.mediavee.configinjector.processor.impl.TomlFileProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

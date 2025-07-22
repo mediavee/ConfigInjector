@@ -3,7 +3,7 @@ package fr.mediavee.configinjector.processor;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import fr.mediavee.configinjector.processor.JsonFileProcessor;
+import fr.mediavee.configinjector.processor.impl.JsonFileProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

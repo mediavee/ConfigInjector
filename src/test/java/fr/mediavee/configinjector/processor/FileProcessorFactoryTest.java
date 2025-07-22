@@ -1,5 +1,8 @@
 package fr.mediavee.configinjector.processor;
 
+import fr.mediavee.configinjector.processor.impl.JsonFileProcessor;
+import fr.mediavee.configinjector.processor.impl.PropertiesFileProcessor;
+import fr.mediavee.configinjector.processor.impl.YamlFileProcessor;
 import org.junit.jupiter.api.Test;
 
 import java.util.logging.Logger;

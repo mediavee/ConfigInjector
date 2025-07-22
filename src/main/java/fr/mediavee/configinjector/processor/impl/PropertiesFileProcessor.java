@@ -1,4 +1,6 @@
-package fr.mediavee.configinjector.processor;
+package fr.mediavee.configinjector.processor.impl;
+
+import fr.mediavee.configinjector.processor.AbstractFileProcessor;
 
 import java.io.*;
 import java.nio.file.Files;
