@@ -2,6 +2,8 @@ package fr.mediavee.configinjector.processor.impl;
 
 import com.moandjiezana.toml.Toml;
 import com.moandjiezana.toml.TomlWriter;
+import fr.mediavee.configinjector.resolver.impl.SystemVariableResolver;
+import fr.mediavee.configinjector.resolver.VariableResolver;
 import fr.mediavee.configinjector.processor.AbstractFileProcessor;
 
 import java.io.IOException;
@@ -30,6 +32,11 @@ public class TomlFileProcessor extends AbstractFileProcessor {
     
     @Override
     public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
+        return processFile(filePath, changes, validator, new SystemVariableResolver());
+    }
+    
+    @Override
+    public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator, VariableResolver resolver) throws IOException {
         Map<String, Object> data;
         
         if (Files.exists(filePath)) {
@@ -44,7 +51,7 @@ public class TomlFileProcessor extends AbstractFileProcessor {
             String path = (String) change.get("path");
             String value = (String) change.get("value");
             
-            String processedValue = processEnvironmentVariables(value, validator);
+            String processedValue = processEnvironmentVariables(value, validator, resolver);
             
             if (setNestedValue(data, path, processedValue)) {
                 modified = true;

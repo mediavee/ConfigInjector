@@ -1,10 +1,14 @@
 package fr.mediavee.configinjector.processor.impl;
 
+import fr.mediavee.configinjector.resolver.impl.SystemVariableResolver;
+import fr.mediavee.configinjector.resolver.VariableResolver;
 import fr.mediavee.configinjector.processor.AbstractFileProcessor;
-import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
 
-import java.io.*;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -30,6 +34,11 @@ public class YamlFileProcessor extends AbstractFileProcessor {
     
     @Override
     public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
+        return processFile(filePath, changes, validator, new SystemVariableResolver());
+    }
+    
+    @Override
+    public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator, VariableResolver resolver) throws IOException {
         Yaml yaml = new Yaml();
         Map<String, Object> data;
         
@@ -50,7 +59,7 @@ public class YamlFileProcessor extends AbstractFileProcessor {
             String path = (String) change.get("path");
             String value = (String) change.get("value");
             
-            String processedValue = processEnvironmentVariables(value, validator);
+            String processedValue = processEnvironmentVariables(value, validator, resolver);
             
             if (setNestedValue(data, path, processedValue)) {
                 modified = true;

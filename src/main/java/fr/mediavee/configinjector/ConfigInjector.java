@@ -4,6 +4,10 @@ import fr.mediavee.configinjector.exception.MissingRequiredVariableException;
 import fr.mediavee.configinjector.processor.FileProcessor;
 import fr.mediavee.configinjector.processor.FileProcessorFactory;
 import fr.mediavee.configinjector.processor.AbstractFileProcessor.RequiredVariableValidator;
+import fr.mediavee.configinjector.resolver.impl.CompositeVariableResolver;
+import fr.mediavee.configinjector.resolver.impl.EnvironmentFileResolver;
+import fr.mediavee.configinjector.resolver.impl.SystemVariableResolver;
+import fr.mediavee.configinjector.resolver.VariableResolver;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.FileNotFoundException;
@@ -59,6 +63,13 @@ public final class ConfigInjector extends JavaPlugin {
             return;
         }
 
+        String envFile = getConfig().getString("env-file", ".env");
+        Path envFilePath = getServer().getWorldContainer().toPath().resolve(envFile);
+        VariableResolver resolver = new CompositeVariableResolver(
+            new SystemVariableResolver(),
+            new EnvironmentFileResolver(envFilePath)
+        );
+
         boolean stopOnMissingRequired = getConfig().getBoolean("stop-on-missing-required", true);
         List<String> missingVariables = new ArrayList<>();
         RequiredVariableValidator validator = new RequiredVariableValidator(stopOnMissingRequired, missingVariables);
@@ -70,7 +81,7 @@ public final class ConfigInjector extends JavaPlugin {
             String filePath = (String) replacement.get("file");
             List<Map<String, Object>> changes = (List<Map<String, Object>>) replacement.get("changes");
             
-            if (processFileReplacements(filePath, changes, validator)) {
+            if (processFileReplacements(filePath, changes, validator, resolver)) {
                 modifiedFiles++;
             }
             processedFiles++;
@@ -82,12 +93,17 @@ public final class ConfigInjector extends JavaPlugin {
 
         getLogger().info(String.format("Processed %d files, modified %d files", processedFiles, modifiedFiles));
     }
+    
 
     private boolean processFileReplacements(String filePath, List<Map<String, Object>> changes) throws IOException {
         return processFileReplacements(filePath, changes, null);
     }
     
     private boolean processFileReplacements(String filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
+        return processFileReplacements(filePath, changes, validator, new SystemVariableResolver());
+    }
+    
+    private boolean processFileReplacements(String filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator, VariableResolver resolver) throws IOException {
         Path serverRoot = getServer().getWorldContainer().toPath();
         Path fullPath = serverRoot.resolve(filePath);
         
@@ -97,6 +113,6 @@ public final class ConfigInjector extends JavaPlugin {
 
         FileProcessor processor = FileProcessorFactory.getProcessor(filePath);
 
-        return processor.processFile(fullPath, changes, validator);
+        return processor.processFile(fullPath, changes, validator, resolver);
     }
 }

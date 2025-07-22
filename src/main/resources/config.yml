@@ -17,6 +17,10 @@ stop-on-missing-required: true
 # If false (default), continues despite errors
 stop-on-error: true
 
+# Optional .env file for environment variables
+# Checked when system environment variables are not found
+env-file: ".env"
+
 replacements:
   - file: "plugins/plugin/config.yml"
     changes:
