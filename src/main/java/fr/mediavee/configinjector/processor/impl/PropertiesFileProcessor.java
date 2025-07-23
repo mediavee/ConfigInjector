@@ -1,8 +1,12 @@
 package fr.mediavee.configinjector.processor.impl;
 
+import fr.mediavee.configinjector.resolver.impl.SystemVariableResolver;
+import fr.mediavee.configinjector.resolver.VariableResolver;
 import fr.mediavee.configinjector.processor.AbstractFileProcessor;
 
-import java.io.*;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -28,6 +32,11 @@ public class PropertiesFileProcessor extends AbstractFileProcessor {
     
     @Override
     public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
+        return processFile(filePath, changes, validator, new SystemVariableResolver());
+    }
+    
+    @Override
+    public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator, VariableResolver resolver) throws IOException {
         Properties properties = new Properties();
         
         if (Files.exists(filePath)) {
@@ -41,7 +50,7 @@ public class PropertiesFileProcessor extends AbstractFileProcessor {
             String path = (String) change.get("path");
             String value = (String) change.get("value");
             
-            String processedValue = processEnvironmentVariables(value, validator);
+            String processedValue = processEnvironmentVariables(value, validator, resolver);
             String oldValue = properties.getProperty(path);
             
             if (!processedValue.equals(oldValue)) {

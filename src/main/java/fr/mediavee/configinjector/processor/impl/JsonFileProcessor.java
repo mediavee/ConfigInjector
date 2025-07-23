@@ -1,9 +1,13 @@
 package fr.mediavee.configinjector.processor.impl;
 
 import com.google.gson.*;
+import fr.mediavee.configinjector.resolver.impl.SystemVariableResolver;
+import fr.mediavee.configinjector.resolver.VariableResolver;
 import fr.mediavee.configinjector.processor.AbstractFileProcessor;
 
-import java.io.*;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -30,6 +34,11 @@ public class JsonFileProcessor extends AbstractFileProcessor {
     
     @Override
     public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
+        return processFile(filePath, changes, validator, new SystemVariableResolver());
+    }
+    
+    @Override
+    public boolean processFile(Path filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator, VariableResolver resolver) throws IOException {
         JsonObject data;
         
         if (Files.exists(filePath)) {
@@ -46,7 +55,7 @@ public class JsonFileProcessor extends AbstractFileProcessor {
             String path = (String) change.get("path");
             String value = (String) change.get("value");
             
-            String processedValue = processEnvironmentVariables(value, validator);
+            String processedValue = processEnvironmentVariables(value, validator, resolver);
             
             if (setNestedValue(data, path, processedValue)) {
                 modified = true;
