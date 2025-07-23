@@ -47,13 +47,11 @@ public class EnvironmentFileResolver implements VariableResolver {
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
                 line = line.trim();
-                
-                // Skip empty lines and comments
+
                 if (line.isEmpty() || line.startsWith("#")) {
                     continue;
                 }
-                
-                // Parse KEY=VALUE format
+
                 int equalIndex = line.indexOf('=');
                 if (equalIndex == -1) {
                     LOGGER.warning("Invalid line format in " + envFilePath + " at line " + lineNumber + ": " + line);
@@ -68,7 +66,6 @@ public class EnvironmentFileResolver implements VariableResolver {
                     continue;
                 }
 
-                // Remove surrounding quotes if present
                 if ((value.startsWith("\"") && value.endsWith("\"")) || 
                     (value.startsWith("'") && value.endsWith("'"))) {
                     value = value.substring(1, value.length() - 1);
