@@ -15,7 +15,7 @@ import java.util.logging.Logger;
  * Variable resolver that loads variables from a .env file.
  */
 public class EnvironmentFileResolver implements VariableResolver {
-    
+
     private static final Logger LOGGER = Logger.getLogger(EnvironmentFileResolver.class.getName());
     private final Map<String, String> envFileVariables;
     
@@ -36,7 +36,7 @@ public class EnvironmentFileResolver implements VariableResolver {
         Map<String, String> variables = new HashMap<>();
         
         if (!Files.exists(envFilePath)) {
-            LOGGER.info("Environment file not found: " + envFilePath + " (this is optional)");
+            LOGGER.info("Environment file not found at " + envFilePath);
             return variables;
         }
         
@@ -67,7 +67,7 @@ public class EnvironmentFileResolver implements VariableResolver {
                     LOGGER.warning("Empty variable name in " + envFilePath + " at line " + lineNumber);
                     continue;
                 }
-                
+
                 // Remove surrounding quotes if present
                 if ((value.startsWith("\"") && value.endsWith("\"")) || 
                     (value.startsWith("'") && value.endsWith("'"))) {
@@ -76,9 +76,6 @@ public class EnvironmentFileResolver implements VariableResolver {
                 
                 variables.put(key, value);
             }
-            
-            LOGGER.info("Loaded " + variables.size() + " variables from " + envFilePath);
-            
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "Failed to read environment file: " + envFilePath, e);
         }
