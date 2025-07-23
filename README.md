@@ -27,12 +27,14 @@ env-file: ".env" # Optional .env file path (default: ".env")
 replacements:
   - file: "plugins/MyPlugin/config.yml"
     changes:
-      - path: "database.host" 
-        value: "${DB_HOST:localhost}"
+      - path: "database.host"
+        value: "${DB_HOST:localhost}" # Variable with default value
       - path: "database.password"
-        value: "${DB_PASSWORD:}"
+        value: "${DB_PASSWORD:}" # Variable with empty default
+      - path: "api.key"
+        value: "${API_KEY}" # Required variable, will stop server if missing (unless stop-on-missing-required is false)
       - path: "jdbc.url"
-        value: "jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:mydb}"
+        value: "jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:mydb}?user=${DB_USER:root}&password=${DB_PASSWORD:}" # Complex example with multiple variables
 ```
 
 ## Compatibility
