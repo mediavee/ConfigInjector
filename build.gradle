@@ -1,85 +1,65 @@
 plugins {
     id 'java'
-    id 'com.gradleup.shadow' version '8.3.8'
+    id 'com.gradleup.shadow' version '9.6.1'
 }
 
 group = 'fr.mediavee'
-version = '1.1-SNAPSHOT'
+version = '2.0.0'
 
 repositories {
     mavenCentral()
-    maven {
-        name = "papermc-repo"
-        url = "https://repo.papermc.io/repository/maven-public/"
-    }
-    maven {
-        name = "sonatype"
-        url = "https://oss.sonatype.org/content/groups/public/"
-    }
 }
 
 dependencies {
-    compileOnly "com.destroystokyo.paper:paper-api:1.12.2-R0.1-SNAPSHOT"
-    implementation "com.moandjiezana.toml:toml4j:0.7.2"
+    implementation 'org.yaml:snakeyaml:2.7'
+    implementation 'com.google.code.gson:gson:2.14.0'
+    implementation 'com.electronwill.night-config:toml:3.9.0'
+    implementation 'com.typesafe:config:1.4.9'
 
-    testImplementation "com.destroystokyo.paper:paper-api:1.12.2-R0.1-SNAPSHOT"
-    testImplementation "org.junit.jupiter:junit-jupiter:5.9.2"
-}
-
-def targetJavaVersion = 17
-java {
-    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
-    sourceCompatibility = javaVersion
-    targetCompatibility = javaVersion
-    if (JavaVersion.current() < javaVersion) {
-        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    }
+    testImplementation platform('org.junit:junit-bom:5.14.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    options.release = 21
+    options.compilerArgs += ['-Xlint:all', '-Werror']
+}
 
-    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
-        options.release.set(targetJavaVersion)
+jar {
+    enabled = false
+}
+
+shadowJar {
+    archiveBaseName = 'configinjector'
+    archiveClassifier = ''
+    manifest {
+        attributes(
+            'Premain-Class': 'fr.mediavee.configinjector.ConfigInjector',
+            'Main-Class': 'fr.mediavee.configinjector.ConfigInjector',
+            'Implementation-Version': project.version
+        )
     }
+    // The agent jar joins the server's system class path, so bundled libraries
+    // must not shadow the server's own SnakeYAML, Gson or night-config.
+    def libs = 'fr.mediavee.configinjector.libs'
+    relocate 'org.yaml.snakeyaml', "${libs}.snakeyaml"
+    relocate 'com.google.gson', "${libs}.gson"
+    relocate 'com.electronwill.nightconfig', "${libs}.nightconfig"
+    relocate 'com.typesafe.config', "${libs}.typesafe.config"
+    // Gson's error-prone annotations are compile-time only.
+    exclude '**/module-info.class', 'META-INF/maven/**', 'META-INF/versions/**', 'META-INF/proguard/**', 'com/google/errorprone/**'
+}
+
+assemble {
+    dependsOn shadowJar
 }
 
 test {
     useJUnitPlatform()
-}
-
-processResources {
-    def props = [version: version]
-    inputs.properties props
-    filteringCharset 'UTF-8'
-    filesMatching('plugin.yml') {
-        expand props
-    }
-}
-
-shadowJar {
-    enableRelocation = true
-    relocationPrefix = group + '.' + project.name + '.libs'
-}
-
-jar {
     dependsOn shadowJar
-}
-
-build {
-    dependsOn shadowJar
-    finalizedBy 'copyToTarget'
-}
-
-clean {
-    delete "$rootDir/target"
-}
-
-tasks.register('copyToTarget', Copy) {
-    dependsOn shadowJar
-    from(shadowJar.archiveFile)
-    into("$rootDir/target")
-    rename { fileName ->
-        return "${project.name}-${version}.jar"
-    }
+    def agentJar = shadowJar.archiveFile
+    inputs.file(agentJar)
+    jvmArgumentProviders.add({ ["-Dconfiginjector.jar=${agentJar.get().asFile}"] } as CommandLineArgumentProvider)
 }
