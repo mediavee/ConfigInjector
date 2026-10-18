@@ -5,7 +5,9 @@ import fr.mediavee.configinjector.ConfigInjector.Outcome;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -110,8 +112,50 @@ class ForbiddenTest {
     void hoconWithUnresolvedSubstitutionsIsStillChecked() throws IOException {
         String escaped = PROD_PASSWORD.replace("P", "\\u0050");
         OverlayFixture fixture = OverlayFixture.in(temp).file("plugin.conf", "password = \"" + escaped + "\"\nport = ${server.port}\n");
-        assertEquals(List.of("plugin.conf: value matches forbidden.sha256[1] (at password)"),
+        assertEquals(List.of("plugin.conf:1: value matches forbidden.sha256[1]", "plugin.conf: value matches forbidden.sha256[1] (at password)"),
                 fixture.run(overlay(), Mode.CHECK, Map.of()).problems());
+    }
+
+    @Test
+    void hoconConcatenationWithAnUnresolvedSubstitutionIsChecked() throws IOException {
+        String escaped = PROD_PASSWORD.replace("P", "\\u0050");
+        OverlayFixture fixture = OverlayFixture.in(temp)
+                .file("a.conf", "password = \"" + escaped + "\"${suffix}\n")
+                .file("b.conf", "password = \"Pr0d-\"${empty}\"P4ssw0rd\" // comment\n");
+        assertEquals(List.of("a.conf:1: value matches forbidden.sha256[1]", "b.conf:1: value matches forbidden.sha256[1]"),
+                fixture.run(overlay(), Mode.CHECK, Map.of()).problems().stream().sorted().toList());
+    }
+
+    @Test
+    void globCharacterClassesMatch() throws IOException {
+        assertTrue(ForbiddenScanner.Glob.of("plugins/[AB]/*.yml").matches(Path.of("plugins/A/config.yml")));
+        assertFalse(ForbiddenScanner.Glob.of("plugins/[!AB]/*.yml").matches(Path.of("plugins/A/config.yml")));
+        assertTrue(ForbiddenScanner.Glob.of("plugins/[a-c]?/*.yml").matches(Path.of("plugins/bX/config.yml")));
+        OverlayFixture fixture = OverlayFixture.in(temp).file("plugins/A/config.yml", "host: " + PROD_HOST + "\n");
+        Outcome outcome = fixture.run(overlay() + "  scan: [\"plugins/[AB]/*.yml\"]\n", Mode.CHECK, Map.of());
+        assertEquals(List.of("plugins/A/config.yml:1: value matches forbidden.contains[0] (at host)"), outcome.problems());
+    }
+
+    @Test
+    void duplicateYamlKeysAreBothCheckedAndNeverLogged() throws IOException {
+        OverlayFixture fixture = OverlayFixture.in(temp)
+                .file("dup.yml", PROD_PASSWORD + ": \"\\x41\"\nk: \"" + PROD_PASSWORD.replace("P", "\\x50") + "\"\nk: other\n" + PROD_PASSWORD + ": two\n");
+        Files.writeString(fixture.overlay(), overlay());
+        PrintStream stderr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        Outcome outcome;
+        try {
+            System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+            outcome = fixture.run(overlay(), Mode.CHECK, Map.of());
+        } finally {
+            System.setErr(stderr);
+        }
+        assertEquals("", captured.toString(StandardCharsets.UTF_8));
+        assertEquals(List.of(
+                "dup.yml:1: value matches forbidden.sha256[1] (a top-level key)",
+                "dup.yml:2: value matches forbidden.sha256[1] (at k)",
+                "dup.yml:4: value matches forbidden.sha256[1] (a top-level key)"
+        ), outcome.problems().stream().sorted().toList());
     }
 
     @Test

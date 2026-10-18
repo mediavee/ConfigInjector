@@ -26,13 +26,19 @@ import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.DuplicateKeyException;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 import org.yaml.snakeyaml.error.MarkedYAMLException;
+import org.yaml.snakeyaml.nodes.MappingNode;
+import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.ScalarNode;
+import org.yaml.snakeyaml.nodes.SequenceNode;
 import org.yaml.snakeyaml.representer.Representer;
 
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -115,12 +121,49 @@ enum Format {
      * them from sources the scan cannot see, so every literal value is still checked.
      */
     Object parseForScan(String text) {
+        if (this == YAML) {
+            // Composed nodes keep every value of a duplicated key, which loading would drop.
+            List<Object> documents = new ArrayList<>();
+            yaml().composeAll(new StringReader(text)).forEach(node -> documents.add(scanTree(node, new IdentityHashMap<>())));
+            return documents.size() == 1 ? documents.getFirst() : documents;
+        }
         if (this != HOCON) {
             return parse(text);
         }
         return scanTree(ConfigFactory.parseString(text, ConfigParseOptions.defaults().setSyntax(ConfigSyntax.CONF))
                 .resolve(ConfigResolveOptions.defaults().setAllowUnresolved(true))
                 .root());
+    }
+
+    /** A YAML mapping as composed, duplicate keys included. */
+    record YamlMapping(List<Map.Entry<Object, Object>> entries) {
+    }
+
+    /** A YAML scalar with its 1-based source line. */
+    record YamlScalar(String value, int line) {
+    }
+
+    private static Object scanTree(Node node, IdentityHashMap<Node, Boolean> ancestors) {
+        if (ancestors.put(node, Boolean.TRUE) != null) {
+            return null;
+        }
+        Object tree = switch (node) {
+            case ScalarNode scalar -> new YamlScalar(scalar.getValue(), scalar.getStartMark().getLine() + 1);
+            case SequenceNode sequence -> {
+                List<Object> list = new ArrayList<>();
+                sequence.getValue().forEach(child -> list.add(scanTree(child, ancestors)));
+                yield list;
+            }
+            case MappingNode mapping -> {
+                List<Map.Entry<Object, Object>> entries = new ArrayList<>();
+                mapping.getValue().forEach(tuple -> entries.add(new AbstractMap.SimpleEntry<>(
+                        scanTree(tuple.getKeyNode(), ancestors), scanTree(tuple.getValueNode(), ancestors))));
+                yield new YamlMapping(entries);
+            }
+            default -> null;
+        };
+        ancestors.remove(node);
+        return tree;
     }
 
     private static Object scanTree(ConfigValue value) {
@@ -183,6 +226,8 @@ enum Format {
     private static Yaml yaml() {
         LoaderOptions loader = new LoaderOptions();
         loader.setCodePointLimit(Integer.MAX_VALUE);
+        // SnakeYAML logs duplicated keys to stderr, and a key may be a production secret.
+        loader.setWarnOnDuplicateKeys(false);
         DumperOptions dumper = new DumperOptions();
         dumper.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
         dumper.setIndent(2);

@@ -12,6 +12,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -28,7 +29,10 @@ import java.util.regex.Pattern;
  */
 final class ForbiddenScanner {
 
-    /** Path globs where {@code **} spans directories and {@code **}{@code /} also matches no directory. */
+    /**
+     * Path globs with the {@link java.nio.file.FileSystem#getPathMatcher} syntax, except that
+     * {@code **}{@code /} also matches no directory, as in most tools.
+     */
     record Glob(Pattern pattern, Optional<Pattern> directory) {
 
         static Glob of(String glob) {
@@ -51,6 +55,23 @@ final class ForbiddenScanner {
                 }
                 if (glob.startsWith("**", i)) {
                     regex.append(".*");
+                    i += 2;
+                    continue;
+                }
+                if (c == '[' && glob.indexOf(']', i + 2) > 0) {
+                    int close = glob.indexOf(']', i + 2);
+                    String members = glob.substring(i + 1, close);
+                    boolean negated = members.startsWith("!");
+                    regex.append(negated ? "[^/" : "[");
+                    for (char member : (negated ? members.substring(1) : members).toCharArray()) {
+                        regex.append(member == '-' || Character.isLetterOrDigit(member) ? String.valueOf(member) : "\\" + member);
+                    }
+                    regex.append(negated ? "]" : "&&[^/]]");
+                    i = close + 1;
+                    continue;
+                }
+                if (c == '\\' && i + 1 < glob.length()) {
+                    regex.append(Pattern.quote(String.valueOf(glob.charAt(i + 1))));
                     i += 2;
                     continue;
                 }
@@ -173,6 +194,7 @@ final class ForbiddenScanner {
             Set<String> candidates = candidates(line);
             int separator = firstSeparator(line);
             if (separator >= 0) {
+                candidates.addAll(candidates(line.substring(0, separator)));
                 candidates.addAll(candidates(line.substring(separator + 1)));
             }
             checkHash(relative, i + 1, candidates, null);
@@ -180,6 +202,12 @@ final class ForbiddenScanner {
         Optional<Format> format = Format.byExtension(relative);
         if (format.isEmpty()) {
             return;
+        }
+        if (format.get() == Format.HOCON) {
+            hoconLiterals(text).forEach(literal -> {
+                checkContains(relative, literal.line(), literal.text(), null);
+                checkHash(relative, literal.line(), candidates(literal.text()), null);
+            });
         }
         Object tree;
         try {
@@ -189,6 +217,87 @@ final class ForbiddenScanner {
             return;
         }
         walk(relative, lines, tree, "");
+    }
+
+    private record Literal(int line, String text) {
+    }
+
+    /**
+     * Escape-decoded HOCON strings, read from the text so that values the parser cannot resolve
+     * are still checked: every quoted string, and every run of concatenated values with its
+     * substitutions dropped ({@code "prod-"${suffix}} yields {@code prod-}, then {@code "a"${x}"b"} yields {@code ab}).
+     */
+    private static List<Literal> hoconLiterals(String text) {
+        List<Literal> literals = new ArrayList<>();
+        StringBuilder run = new StringBuilder();
+        int line = 1;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (text.startsWith("\"\"\"", i)) {
+                int end = text.indexOf("\"\"\"", i + 3);
+                end = end < 0 ? text.length() : end;
+                String literal = text.substring(i + 3, end);
+                literals.add(new Literal(line, literal));
+                run.append(literal);
+                line += (int) literal.chars().filter(ch -> ch == '\n').count();
+                i = Math.min(text.length(), end + 3);
+            } else if (c == '"') {
+                StringBuilder literal = new StringBuilder();
+                i++;
+                while (i < text.length() && text.charAt(i) != '"' && text.charAt(i) != '\n') {
+                    char ch = text.charAt(i++);
+                    if (ch == '\\' && i < text.length()) {
+                        char escaped = text.charAt(i++);
+                        switch (escaped) {
+                            case 'n' -> literal.append('\n');
+                            case 't' -> literal.append('\t');
+                            case 'r' -> literal.append('\r');
+                            case 'b' -> literal.append('\b');
+                            case 'f' -> literal.append('\f');
+                            case 'u' -> {
+                                if (i + 4 <= text.length() && text.substring(i, i + 4).matches("[0-9a-fA-F]{4}")) {
+                                    literal.append((char) Integer.parseInt(text.substring(i, i + 4), 16));
+                                    i += 4;
+                                } else {
+                                    literal.append('u');
+                                }
+                            }
+                            default -> literal.append(escaped);
+                        }
+                    } else {
+                        literal.append(ch);
+                    }
+                }
+                i++;
+                literals.add(new Literal(line, literal.toString()));
+                run.append(literal);
+            } else if (text.startsWith("${", i)) {
+                int end = text.indexOf('}', i);
+                i = end < 0 ? text.length() : end + 1;
+            } else if (c == '#' || text.startsWith("//", i)) {
+                while (i < text.length() && text.charAt(i) != '\n') {
+                    i++;
+                }
+            } else {
+                if ("\n=:{}[],".indexOf(c) >= 0) {
+                    if (!run.toString().isBlank()) {
+                        literals.add(new Literal(line, run.toString()));
+                    }
+                    run.setLength(0);
+                    if (c == '\n') {
+                        line++;
+                    }
+                } else {
+                    run.append(c);
+                }
+                i++;
+            }
+        }
+        if (!run.toString().isBlank()) {
+            literals.add(new Literal(line, run.toString()));
+        }
+        return literals;
     }
 
     /** Honours a UTF-16 or UTF-8 byte order mark; anything else decodes as UTF-8 with replacement. */
@@ -236,13 +345,32 @@ final class ForbiddenScanner {
                     walk(relative, lines, list.get(i), path + "[" + i + "]");
                 }
             }
+            case Format.YamlMapping mapping -> mapping.entries().forEach(entry -> {
+                String detail = path.isEmpty() ? "a top-level key" : "a key under " + path;
+                boolean forbidden;
+                String key;
+                if (entry.getKey() instanceof Format.YamlScalar(String value, int line)) {
+                    key = value;
+                    forbidden = checkScalar(relative, line, value, detail);
+                } else {
+                    key = "<complex key>";
+                    walk(relative, lines, entry.getKey(), path);
+                    forbidden = false;
+                }
+                String segment = forbidden ? "<forbidden key>" : key;
+                walk(relative, lines, entry.getValue(), path.isEmpty() ? segment : path + "." + segment);
+            });
+            case Format.YamlScalar(String value, int line) -> checkScalar(relative, line, value, "at " + path);
             case Object scalar -> checkScalar(relative, lines, String.valueOf(scalar), "at " + path);
         }
     }
 
     /** Returns whether {@code value} matched a rule. */
     private boolean checkScalar(Path relative, String[] lines, String value, String detail) {
-        int line = lineOf(lines, value);
+        return checkScalar(relative, lineOf(lines, value), value, detail);
+    }
+
+    private boolean checkScalar(Path relative, int line, String value, String detail) {
         int before = hitCount;
         checkContains(relative, line, value, detail);
         checkHash(relative, line, candidates(value), detail);
