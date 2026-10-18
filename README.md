@@ -74,12 +74,12 @@ files:
 forbidden:
   sha256: [<hex>, ...]
   contains: ["hp110381-001.eu.clouddb.ovh.net", "141.94.103.40"]
-  scan: ["**/*.yml", "**/*.yaml", "**/*.json", "**/*.toml", "**/*.properties", "**/*.conf", "**/*.secret", "**/*.txt"]
+  scan: ["**/*.yml", "**/*.yaml", "**/*.json", "**/*.toml", "**/*.properties", "**/*.conf", "**/*.hocon", "**/*.secret", "**/*.txt"]
   exclude: ["logs/**", "cache/**", "world*/**", "libraries/**", "versions/**"]
   max-file-size: 2MB
 ```
 
-Unknown keys anywhere in the overlay are errors, so a typo never goes unnoticed.
+Unknown or repeated keys anywhere in the overlay are errors, so a typo never goes unnoticed.
 
 ### Files
 
@@ -88,6 +88,9 @@ Each entry under `files` is a path relative to the server root and one of:
 - a list of edits;
 - `{format: <format>, set: [edits]}` to override the format guessed from the extension;
 - `{raw: <string>}` to replace the whole file, creating it if absent (new files get mode 600).
+
+Entries naming the same file (`config.yml` and `./config.yml`) are merged into one. A target that
+is, or sits under, a symlink is refused.
 
 | Format       | Extensions        | Library                     |
 |--------------|-------------------|-----------------------------|
@@ -103,6 +106,7 @@ What a rewrite keeps:
   HOCON substitutions are resolved, as Configurate does when a plugin saves its config.
 - TOML keeps its comments.
 - `.properties` files keep every line except the edited ones, in place.
+- JSON numbers keep their exact source text.
 
 A file is rewritten only when an edit changes a value, so applying the same overlay twice leaves
 the files untouched the second time.
@@ -129,16 +133,35 @@ is resolved against the server root.
 
 ### Forbidden values
 
-After applying, every file matching a `scan` glob and no `exclude` glob is checked, skipping
-files larger than `max-file-size` (default 2MB) and binary files. Globs are relative to the server
-root and `**/` also matches at the root. The overlay and the secrets file are never scanned.
+After applying, every file matching a `scan` glob and no `exclude` glob is checked. Globs are
+relative to the server root: `*` matches within a directory, `**` across directories, `**/` zero
+or more directories (`plugins/X/**/*.yml` matches `plugins/X/config.yml`), and `{a,b}` either
+alternative. The overlay and the secrets file are never scanned.
 
-- `contains`: a substring forbidden anywhere in a line or a value.
-- `sha256`: SHA-256 hashes (hex) of exact production values. Every line is checked as a whole and
-  for the value after its first `=` or `:`, without surrounding whitespace, quotes and trailing
-  comma. Files in a supported format are also parsed and every scalar value is checked.
+The scan fails closed. Anything it cannot inspect is an error, not a skip: tell it explicitly with
+`exclude`.
 
-A match is reported with its file, line, rule and key path, never with the value:
+- A symlink, file or directory, inside the scanned tree is an error (the walk never follows links).
+- A matching file that is not a regular file, or is larger than `max-file-size` (default 2MB), is
+  an error.
+- Every matching file is read, binary or not. A UTF-8 or UTF-16 byte order mark is honoured;
+  anything else is decoded as UTF-8.
+
+The rules:
+
+- `contains`: a substring forbidden anywhere in a line, a value or a key.
+- `sha256`: SHA-256 hashes (hex) of exact production values. The following are hashed, each
+  exactly and without surrounding whitespace, trailing comma or quotes:
+  - the whole file;
+  - every line;
+  - the value after each line's first `=` or `:`.
+
+  Files in a supported format are also parsed, and every key and scalar value is checked. HOCON
+  files are parsed without resolving substitutions. A file that fails to parse is still checked
+  line by line.
+
+A match is reported with its file, line, rule and key path, never with the value (a matching
+key shows as `<forbidden key>` in paths):
 
 ```
 configinjector: plugins/LiteBans/config.yml:12: value matches forbidden.sha256[0] (at sql.password)
@@ -151,10 +174,16 @@ values shown above.
 
 ### Errors
 
-Every problem is collected before anything is written: a missing file, a missing path, an
-unresolved placeholder or a parse error in any file means no file is written at all. Files are
-written atomically (temporary file in the same directory, then an atomic move), keeping their
-permissions.
+Every problem is collected before anything is written. A missing file, a missing path, an
+unresolved placeholder, a parse error or a target that is not writable, in any file, means no file
+is written at all.
+
+Files are written atomically (temporary file in the same directory, then an atomic move), keeping
+their permissions, and their owner and group where the process is allowed to set them. If a write
+still fails midway, the files already written are restored from their original content.
+
+Error messages never quote the content of a file or of the overlay: a parse error gives only the
+format, line and column.
 
 ## Build
 
