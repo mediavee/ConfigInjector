@@ -4,12 +4,17 @@ import fr.mediavee.configinjector.ConfigInjector.Outcome;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -123,6 +128,49 @@ class EditTest {
         Outcome outcome = fixture.apply("files:\n  config.yml:\n    - {path: a, valeu: 2}\n");
         assertTrue(outcome.problems().contains("config.yml edit #1: unknown key 'valeu' (expected blank, create, path, value)"),
                 outcome.problems().toString());
+    }
+
+    @Test
+    void jsonNumbersKeepTheirExactValue() throws IOException {
+        fixture = OverlayFixture.in(temp).file("data.json", "{\"id\": 9223372036854775809, \"ratio\": 0.10000000000000000001, \"port\": 1}");
+        assertEquals(List.of(), fixture.apply("files:\n  data.json:\n    - {path: port, value: 2}\n").problems());
+        assertEquals("{\n  \"id\": 9223372036854775809,\n  \"ratio\": 0.10000000000000000001,\n  \"port\": 2\n}\n", fixture.read("data.json"));
+    }
+
+    @Test
+    void propertyWithoutSeparatorGetsOne() throws IOException {
+        fixture = OverlayFixture.in(temp).file("server.properties", "rcon.password\nmotd\n");
+        assertEquals(List.of(), fixture.apply("files:\n  server.properties:\n    - {path: rcon.password, value: dev-secret}\n").problems());
+        assertEquals("rcon.password=dev-secret\nmotd\n", fixture.read("server.properties"));
+    }
+
+    @Test
+    void parseErrorsNeverQuoteTheFile() throws IOException {
+        String secret = "TOP-SECRET-VALUE";
+        Map<String, String> broken = Map.of(
+                "a.yml", "password: " + secret + "\n  bad: [\n",
+                "b.json", "{\"password\": \"" + secret + "\" garbage}",
+                "c.toml", "password = \"" + secret + "\" garbage\n",
+                "d.conf", "password = \"" + secret + "\" } garbage\n");
+        fixture = OverlayFixture.in(temp);
+        StringBuilder overlay = new StringBuilder("files:\n");
+        for (Map.Entry<String, String> file : broken.entrySet()) {
+            fixture.file(file.getKey(), file.getValue());
+            overlay.append("  ").append(file.getKey()).append(":\n    - {path: password, value: dev}\n");
+        }
+        assertStderrHides(secret, overlay.toString(), 5);
+        assertStderrHides(secret, "files: {config.yml: {raw: \"" + secret + "\"}\n", 2);
+    }
+
+    private void assertStderrHides(String secret, String overlay, int expectedLines) throws IOException {
+        Files.writeString(fixture.overlay(), overlay);
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = ConfigInjector.cli(new String[]{"check", fixture.overlay().toString(), "--dir", fixture.root().toString()},
+                new PrintStream(new ByteArrayOutputStream()), new PrintStream(err, true, StandardCharsets.UTF_8));
+        String stderr = err.toString(StandardCharsets.UTF_8);
+        assertEquals(1, code);
+        assertEquals(expectedLines, stderr.lines().count(), stderr);
+        assertFalse(stderr.contains(secret), stderr);
     }
 
     private OverlayFixture fixture;

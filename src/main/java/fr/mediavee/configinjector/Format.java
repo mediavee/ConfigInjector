@@ -10,15 +10,22 @@ import com.electronwill.nightconfig.toml.TomlWriter;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.ToNumberPolicy;
+import com.typesafe.config.ConfigException;
 import com.typesafe.config.ConfigFactory;
+import com.typesafe.config.ConfigList;
+import com.typesafe.config.ConfigObject;
 import com.typesafe.config.ConfigParseOptions;
 import com.typesafe.config.ConfigRenderOptions;
+import com.typesafe.config.ConfigResolveOptions;
 import com.typesafe.config.ConfigSyntax;
+import com.typesafe.config.ConfigValue;
 import com.typesafe.config.ConfigValueFactory;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.DuplicateKeyException;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.error.MarkedYAMLException;
 import org.yaml.snakeyaml.representer.Representer;
 
 import java.io.IOException;
@@ -32,6 +39,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Supported file formats. Each parses to a tree of maps, lists and scalars; properties files are
@@ -40,8 +49,10 @@ import java.util.Properties;
 enum Format {
     YAML, JSON, TOML, HOCON, PROPERTIES;
 
+    private static final Pattern LINE_COLUMN = Pattern.compile("line (\\d+) column (\\d+)");
+
     private static final Gson GSON = new GsonBuilder()
-            .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
+            .setObjectToNumberStrategy(ToNumberPolicy.LAZILY_PARSED_NUMBER)
             .setPrettyPrinting()
             .disableHtmlEscaping()
             .serializeNulls()
@@ -97,6 +108,59 @@ enum Format {
                 yield map;
             }
         };
+    }
+
+    /**
+     * Parses for the forbidden scan. HOCON substitutions stay unresolved: the server may resolve
+     * them from sources the scan cannot see, so every literal value is still checked.
+     */
+    Object parseForScan(String text) {
+        if (this != HOCON) {
+            return parse(text);
+        }
+        return scanTree(ConfigFactory.parseString(text, ConfigParseOptions.defaults().setSyntax(ConfigSyntax.CONF))
+                .resolve(ConfigResolveOptions.defaults().setAllowUnresolved(true))
+                .root());
+    }
+
+    private static Object scanTree(ConfigValue value) {
+        try {
+            return switch (value) {
+                case ConfigObject object -> {
+                    Map<String, Object> map = new LinkedHashMap<>();
+                    object.forEach((key, child) -> map.put(key, scanTree(child)));
+                    yield map;
+                }
+                case ConfigList list -> {
+                    List<Object> converted = new ArrayList<>(list.size());
+                    list.forEach(child -> converted.add(scanTree(child)));
+                    yield converted;
+                }
+                default -> value.unwrapped();
+            };
+        } catch (ConfigException.NotResolved e) {
+            // An unresolved substitution has no value; its source text is covered by the line scan.
+            return null;
+        }
+    }
+
+    /**
+     * Describes a parse failure by location only: library messages quote the offending input,
+     * which may be a production secret.
+     */
+    String describeError(RuntimeException e) {
+        String location = switch (e) {
+            case MarkedYAMLException yaml when yaml.getProblemMark() != null ->
+                    " at line " + (yaml.getProblemMark().getLine() + 1) + ", column " + (yaml.getProblemMark().getColumn() + 1);
+            case ConfigException config when config.origin() != null && config.origin().lineNumber() > 0 ->
+                    " at line " + config.origin().lineNumber();
+            default -> {
+                Matcher matcher = LINE_COLUMN.matcher(String.valueOf(e.getMessage()));
+                yield matcher.find() ? " at line " + matcher.group(1) + ", column " + matcher.group(2) : "";
+            }
+        };
+        String reason = e instanceof DuplicateKeyException ? "duplicate key" : "invalid " + name();
+        return reason + location;
     }
 
     String write(Object tree) {

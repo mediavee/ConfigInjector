@@ -94,7 +94,7 @@ public final class ConfigInjector {
         Path overlayPath = overlayFile.toAbsolutePath().normalize();
         Overlay overlay = Overlay.load(overlayPath, realRoot, problems);
         Placeholders placeholders = Placeholders.load(overlay.secrets(), environment, problems);
-        List<Applier.PlannedWrite> writes = Applier.plan(overlay, placeholders, problems);
+        List<Applier.PlannedWrite> writes = Applier.plan(realRoot, overlay, placeholders, problems);
         if (!problems.isEmpty()) {
             return new Outcome(problems, 0, 0);
         }

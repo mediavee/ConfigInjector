@@ -5,7 +5,6 @@ import fr.mediavee.configinjector.ConfigPath.Key;
 import fr.mediavee.configinjector.ConfigPath.Segment;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -141,8 +140,9 @@ final class Tree {
         return Objects.equals(a, b);
     }
 
+    /** By written form, as Gson keeps JSON numbers as their source text. */
     private static boolean isIntegral(Number n) {
-        return n instanceof Integer || n instanceof Long || n instanceof BigInteger || n instanceof Short || n instanceof Byte;
+        return n.toString().matches("-?\\d+");
     }
 
     private static boolean isFinite(Number n) {

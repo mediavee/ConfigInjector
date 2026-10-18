@@ -3,62 +3,97 @@ package fr.mediavee.configinjector;
 import fr.mediavee.configinjector.Overlay.Forbidden;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
- * Looks for production values left in the server's files. Reports name the file, line and rule,
- * never the value that matched.
+ * Looks for production values left in the server's files. It fails closed: a file it cannot
+ * inspect (symlink, special file, over the size limit, unreadable) is a problem, not a skip.
+ * Reports name the file, line and rule, never the value that matched.
  */
 final class ForbiddenScanner {
 
-    private record Glob(PathMatcher pattern, Optional<PathMatcher> atRoot, Optional<PathMatcher> directory) {
+    /** Path globs where {@code **} spans directories and {@code **}{@code /} also matches no directory. */
+    record Glob(Pattern pattern, Optional<Pattern> directory) {
 
         static Glob of(String glob) {
-            // Java globs need a slash for "**/", so "**/*.yml" would skip files at the root.
-            Optional<PathMatcher> atRoot = glob.startsWith("**/") ? Optional.of(matcher(glob.substring(3))) : Optional.empty();
-            Optional<PathMatcher> directory = glob.endsWith("/**")
-                    ? Optional.of(matcher(glob.substring(0, glob.length() - 3)))
+            Optional<Pattern> directory = glob.endsWith("/**")
+                    ? Optional.of(regex(glob.substring(0, glob.length() - 3)))
                     : Optional.empty();
-            return new Glob(matcher(glob), atRoot, directory);
+            return new Glob(regex(glob), directory);
         }
 
-        private static PathMatcher matcher(String glob) {
-            return FileSystems.getDefault().getPathMatcher("glob:" + glob);
+        private static Pattern regex(String glob) {
+            StringBuilder regex = new StringBuilder();
+            int braces = 0;
+            int i = 0;
+            while (i < glob.length()) {
+                char c = glob.charAt(i);
+                if (glob.startsWith("**/", i)) {
+                    regex.append("(?:.*/)?");
+                    i += 3;
+                    continue;
+                }
+                if (glob.startsWith("**", i)) {
+                    regex.append(".*");
+                    i += 2;
+                    continue;
+                }
+                switch (c) {
+                    case '*' -> regex.append("[^/]*");
+                    case '?' -> regex.append("[^/]");
+                    case '{' -> {
+                        regex.append("(?:");
+                        braces++;
+                    }
+                    case '}' -> {
+                        regex.append(')');
+                        braces--;
+                    }
+                    case ',' -> regex.append(braces > 0 ? "|" : ",");
+                    default -> regex.append(Pattern.quote(String.valueOf(c)));
+                }
+                i++;
+            }
+            return Pattern.compile(regex.toString());
         }
 
         boolean matches(Path relative) {
-            return pattern.matches(relative) || atRoot.map(m -> m.matches(relative)).orElse(false);
+            return pattern.matcher(slashes(relative)).matches();
         }
 
         boolean coversDirectory(Path relative) {
-            return directory.map(m -> m.matches(relative)).orElse(false);
+            return directory.map(d -> d.matcher(slashes(relative)).matches()).orElse(false);
+        }
+
+        private static String slashes(Path relative) {
+            return relative.toString().replace(relative.getFileSystem().getSeparator(), "/");
         }
     }
 
     private final Forbidden rules;
-    private final Path root;
     private final Map<String, Integer> hashIndex = new LinkedHashMap<>();
     private final Map<String, String> hits = new LinkedHashMap<>();
     private final MessageDigest sha256;
+    private int hitCount;
 
-    private ForbiddenScanner(Forbidden rules, Path root) {
+    private ForbiddenScanner(Forbidden rules) {
         this.rules = rules;
-        this.root = root;
         for (int i = 0; i < rules.sha256().size(); i++) {
             hashIndex.putIfAbsent(rules.sha256().get(i), i);
         }
@@ -74,7 +109,7 @@ final class ForbiddenScanner {
         if (rules.isEmpty()) {
             return 0;
         }
-        ForbiddenScanner scanner = new ForbiddenScanner(rules, root);
+        ForbiddenScanner scanner = new ForbiddenScanner(rules);
         List<Glob> include = rules.scan().stream().map(Glob::of).toList();
         List<Glob> exclude = rules.exclude().stream().map(Glob::of).toList();
         int[] scanned = {0};
@@ -90,14 +125,26 @@ final class ForbiddenScanner {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
                     Path relative = root.relativize(file);
-                    if (attributes.isRegularFile()
-                            && attributes.size() <= rules.maxFileSize()
-                            && !ignored.contains(file)
-                            && include.stream().anyMatch(glob -> glob.matches(relative))
-                            && exclude.stream().noneMatch(glob -> glob.matches(relative))) {
-                        if (scanner.scanFile(relative, Files.readAllBytes(file))) {
-                            scanned[0]++;
+                    boolean excluded = exclude.stream().anyMatch(glob -> glob.matches(relative) || glob.coversDirectory(relative));
+                    boolean included = !excluded && include.stream().anyMatch(glob -> glob.matches(relative));
+                    if (ignored.contains(file)) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    if (attributes.isSymbolicLink()) {
+                        // The walk does not follow links, so a linked file or directory would go unchecked.
+                        if (included || (!excluded && Files.isDirectory(file))) {
+                            problems.add(relative + ": symlink not allowed in the scanned tree, exclude it explicitly");
                         }
+                    } else if (!included) {
+                        return FileVisitResult.CONTINUE;
+                    } else if (!attributes.isRegularFile()) {
+                        problems.add(relative + ": not a regular file, exclude it explicitly");
+                    } else if (attributes.size() > rules.maxFileSize()) {
+                        problems.add(relative + ": larger than forbidden.max-file-size (" + attributes.size()
+                                + " bytes), exclude it explicitly or raise the limit");
+                    } else {
+                        scanner.scanFile(relative, Files.readAllBytes(file));
+                        scanned[0]++;
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -115,34 +162,62 @@ final class ForbiddenScanner {
         return scanned[0];
     }
 
-    /** Returns false for binary files, which are skipped. */
-    private boolean scanFile(Path relative, byte[] bytes) {
-        for (byte b : bytes) {
-            if (b == 0) {
-                return false;
-            }
-        }
-        String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\r\n|\r|\n", -1);
+    private void scanFile(Path relative, byte[] bytes) {
+        String text = decode(bytes);
+        // Single-value files such as forwarding.secret are hashed whole, exactly and trimmed.
+        checkHash(relative, 1, candidates(text), null);
+        String[] lines = text.split("\r\n|\r|\n", -1);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             checkContains(relative, i + 1, line, null);
-            String trimmed = line.strip();
-            checkHash(relative, i + 1, unquote(trimmed), null);
-            int separator = firstSeparator(trimmed);
+            Set<String> candidates = candidates(line);
+            int separator = firstSeparator(line);
             if (separator >= 0) {
-                checkHash(relative, i + 1, unquote(trimmed.substring(separator + 1)), null);
+                candidates.addAll(candidates(line.substring(separator + 1)));
+            }
+            checkHash(relative, i + 1, candidates, null);
+        }
+        Optional<Format> format = Format.byExtension(relative);
+        if (format.isEmpty()) {
+            return;
+        }
+        Object tree;
+        try {
+            tree = format.get().parseForScan(text);
+        } catch (RuntimeException e) {
+            // The line scan above already covered every byte; parsing only decodes escapes and nesting.
+            return;
+        }
+        walk(relative, lines, tree, "");
+    }
+
+    /** Honours a UTF-16 or UTF-8 byte order mark; anything else decodes as UTF-8 with replacement. */
+    private static String decode(byte[] bytes) {
+        if (startsWith(bytes, 0xFF, 0xFE)) {
+            return decode(bytes, 2, StandardCharsets.UTF_16LE);
+        }
+        if (startsWith(bytes, 0xFE, 0xFF)) {
+            return decode(bytes, 2, StandardCharsets.UTF_16BE);
+        }
+        if (startsWith(bytes, 0xEF, 0xBB, 0xBF)) {
+            return decode(bytes, 3, StandardCharsets.UTF_8);
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static String decode(byte[] bytes, int offset, Charset charset) {
+        return new String(bytes, offset, bytes.length - offset, charset);
+    }
+
+    private static boolean startsWith(byte[] bytes, int... prefix) {
+        if (bytes.length < prefix.length) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length; i++) {
+            if ((bytes[i] & 0xFF) != prefix[i]) {
+                return false;
             }
         }
-        Format.byExtension(relative).ifPresent(format -> {
-            Object tree;
-            try {
-                tree = format.parse(String.join("\n", lines));
-            } catch (RuntimeException e) {
-                // Unparsable files were already covered line by line; scanned files are not ours to validate.
-                return;
-            }
-            walk(relative, lines, tree, "");
-        });
         return true;
     }
 
@@ -150,48 +225,74 @@ final class ForbiddenScanner {
         switch (Tree.unwrap(node)) {
             case null -> {
             }
-            case Map<?, ?> map -> map.forEach((key, value) ->
-                    walk(relative, lines, value, path.isEmpty() ? String.valueOf(key) : path + "." + key));
+            case Map<?, ?> map -> map.forEach((key, value) -> {
+                String detail = path.isEmpty() ? "a top-level key" : "a key under " + path;
+                // A forbidden key must not appear in the report through the paths below it either.
+                String segment = checkScalar(relative, lines, String.valueOf(key), detail) ? "<forbidden key>" : String.valueOf(key);
+                walk(relative, lines, value, path.isEmpty() ? segment : path + "." + segment);
+            });
             case List<?> list -> {
                 for (int i = 0; i < list.size(); i++) {
                     walk(relative, lines, list.get(i), path + "[" + i + "]");
                 }
             }
-            case Object scalar -> {
-                String value = String.valueOf(scalar);
-                int line = lineOf(lines, value);
-                checkContains(relative, line, value, path);
-                checkHash(relative, line, value, path);
-            }
+            case Object scalar -> checkScalar(relative, lines, String.valueOf(scalar), "at " + path);
         }
     }
 
-    private void checkContains(Path relative, int line, String text, String path) {
+    /** Returns whether {@code value} matched a rule. */
+    private boolean checkScalar(Path relative, String[] lines, String value, String detail) {
+        int line = lineOf(lines, value);
+        int before = hitCount;
+        checkContains(relative, line, value, detail);
+        checkHash(relative, line, candidates(value), detail);
+        return hitCount > before;
+    }
+
+    private void checkContains(Path relative, int line, String text, String detail) {
         for (int i = 0; i < rules.contains().size(); i++) {
             if (text.contains(rules.contains().get(i))) {
-                hit(relative, line, "forbidden.contains[" + i + "]", path);
+                hit(relative, line, "forbidden.contains[" + i + "]", detail);
             }
         }
     }
 
-    private void checkHash(Path relative, int line, String value, String path) {
-        if (hashIndex.isEmpty() || value.isEmpty()) {
+    private void checkHash(Path relative, int line, Set<String> candidates, String detail) {
+        if (hashIndex.isEmpty()) {
             return;
         }
-        String hash = HexFormat.of().formatHex(sha256.digest(value.getBytes(StandardCharsets.UTF_8)));
-        Integer index = hashIndex.get(hash);
-        if (index != null) {
-            hit(relative, line, "forbidden.sha256[" + index + "]", path);
+        for (String candidate : candidates) {
+            String hash = HexFormat.of().formatHex(sha256.digest(candidate.getBytes(StandardCharsets.UTF_8)));
+            Integer index = hashIndex.get(hash);
+            if (index != null) {
+                hit(relative, line, "forbidden.sha256[" + index + "]", detail);
+            }
         }
     }
 
-    private void hit(Path relative, int line, String rule, String path) {
+    /** The exact text and its forms without surrounding whitespace, a trailing comma and quotes. */
+    private static Set<String> candidates(String text) {
+        Set<String> candidates = new LinkedHashSet<>();
+        candidates.add(text);
+        String trimmed = text.strip();
+        candidates.add(trimmed);
+        String withoutComma = trimmed.endsWith(",") ? trimmed.substring(0, trimmed.length() - 1).strip() : trimmed;
+        candidates.add(withoutComma);
+        candidates.add(unquote(trimmed));
+        candidates.add(unquote(withoutComma));
+        candidates.remove("");
+        return candidates;
+    }
+
+    /** {@code detail} locates the match inside a parsed document, or is null for a line match. */
+    private void hit(Path relative, int line, String rule, String detail) {
+        hitCount++;
         String location = line > 0 ? relative + ":" + line : relative.toString();
         String key = location + " " + rule;
-        if (path == null) {
+        if (detail == null) {
             hits.putIfAbsent(key, location + ": value matches " + rule);
         } else {
-            hits.put(key, location + ": value matches " + rule + " (at " + path + ")");
+            hits.put(key, location + ": value matches " + rule + " (" + detail + ")");
         }
     }
 
@@ -217,14 +318,10 @@ final class ForbiddenScanner {
         return Math.min(equals, colon);
     }
 
-    private static String unquote(String text) {
-        String value = text.strip();
-        if (value.endsWith(",")) {
-            value = value.substring(0, value.length() - 1).strip();
-        }
+    private static String unquote(String value) {
         if (value.length() >= 2 && (value.charAt(0) == '"' || value.charAt(0) == '\'')
                 && value.charAt(value.length() - 1) == value.charAt(0)) {
-            value = value.substring(1, value.length() - 1);
+            return value.substring(1, value.length() - 1);
         }
         return value;
     }

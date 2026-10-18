@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -41,7 +42,7 @@ record Overlay(Path file, Optional<Path> secrets, List<FileEdit> files, Forbidde
     record Forbidden(List<String> sha256, List<String> contains, List<String> scan, List<String> exclude, long maxFileSize) {
 
         static final List<String> DEFAULT_SCAN = List.of("**/*.yml", "**/*.yaml", "**/*.json", "**/*.toml",
-                "**/*.properties", "**/*.conf", "**/*.secret", "**/*.txt");
+                "**/*.properties", "**/*.conf", "**/*.hocon", "**/*.secret", "**/*.txt");
         static final List<String> DEFAULT_EXCLUDE = List.of("logs/**", "cache/**", "world*/**", "libraries/**", "versions/**");
         static final long DEFAULT_MAX_FILE_SIZE = 2L * 1024 * 1024;
 
@@ -59,12 +60,14 @@ record Overlay(Path file, Optional<Path> secrets, List<FileEdit> files, Forbidde
         Object document;
         try {
             LoaderOptions options = new LoaderOptions();
+            // A repeated key would silently drop the first block, such as a whole set of forbidden rules.
+            options.setAllowDuplicateKeys(false);
             document = new Yaml(new SafeConstructor(options)).load(Files.readString(overlayFile, StandardCharsets.UTF_8));
         } catch (IOException e) {
             problems.add("cannot read overlay " + overlayFile + ": " + e);
             return new Overlay(overlayFile, Optional.empty(), List.of(), Forbidden.NONE);
         } catch (RuntimeException e) {
-            problems.add("overlay " + overlayFile + " is not valid YAML: " + oneLine(e.getMessage()));
+            problems.add("overlay " + overlayFile + ": " + Format.YAML.describeError(e));
             return new Overlay(overlayFile, Optional.empty(), List.of(), Forbidden.NONE);
         }
         if (!(document instanceof Map<?, ?> top)) {
@@ -80,9 +83,10 @@ record Overlay(Path file, Optional<Path> secrets, List<FileEdit> files, Forbidde
             problems.add("overlay: 'secrets' must be a file path");
         }
 
-        List<FileEdit> files = new ArrayList<>();
+        Map<Path, FileEdit> files = new LinkedHashMap<>();
         if (top.get("files") instanceof Map<?, ?> entries) {
-            entries.forEach((name, spec) -> parseFile(String.valueOf(name), spec, root, problems).ifPresent(files::add));
+            entries.forEach((name, spec) -> parseFile(String.valueOf(name), spec, root, problems)
+                    .ifPresent(edit -> merge(files, edit, problems)));
         } else if (top.containsKey("files")) {
             problems.add("overlay: 'files' must be a map of file path to edits");
         }
@@ -93,7 +97,21 @@ record Overlay(Path file, Optional<Path> secrets, List<FileEdit> files, Forbidde
         } else if (top.containsKey("forbidden")) {
             problems.add("overlay: 'forbidden' must be a map");
         }
-        return new Overlay(overlayFile, secrets, List.copyOf(files), forbidden);
+        return new Overlay(overlayFile, secrets, List.copyOf(files.values()), forbidden);
+    }
+
+    /** Entries naming the same file ({@code a.yml}, {@code ./a.yml}) must apply to a single parse. */
+    private static void merge(Map<Path, FileEdit> files, FileEdit edit, List<String> problems) {
+        FileEdit existing = files.get(edit.path());
+        if (existing == null) {
+            files.put(edit.path(), edit);
+        } else if (existing instanceof Edits first && edit instanceof Edits second && first.format() == second.format()) {
+            List<Assignment> assignments = new ArrayList<>(first.assignments());
+            assignments.addAll(second.assignments());
+            files.put(edit.path(), new Edits(first.name(), first.path(), first.format(), List.copyOf(assignments)));
+        } else {
+            problems.add(edit.name() + ": same file as " + existing.name() + ", with a raw replacement or another format");
+        }
     }
 
     private static Optional<FileEdit> parseFile(String name, Object spec, Path root, List<String> problems) {
@@ -189,6 +207,9 @@ record Overlay(Path file, Optional<Path> secrets, List<FileEdit> files, Forbidde
                 problems.add("forbidden.max-file-size: expected a size such as 2MB, got '" + size + "'");
             }
         }
+        if (maxFileSize <= 0) {
+            problems.add("forbidden.max-file-size must be positive");
+        }
         return new Forbidden(
                 hashes.stream().map(hash -> hash.toLowerCase(Locale.ROOT)).toList(),
                 contains,
@@ -214,9 +235,5 @@ record Overlay(Path file, Optional<Path> secrets, List<FileEdit> files, Forbidde
                 problems.add(where + ": unknown key '" + key + "' (expected " + String.join(", ", allowed.stream().sorted().toList()) + ")");
             }
         }
-    }
-
-    static String oneLine(String message) {
-        return message == null ? "" : message.replaceAll("\\s+", " ").strip();
     }
 }

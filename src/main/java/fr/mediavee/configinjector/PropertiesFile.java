@@ -14,7 +14,7 @@ import java.util.Map;
  */
 final class PropertiesFile {
 
-    private record Entry(int line, String key, int valueStart, boolean continued) {
+    private record Entry(int line, String key, int keyEnd, int valueStart, boolean continued) {
     }
 
     private final List<String> lines;
@@ -61,7 +61,9 @@ final class PropertiesFile {
         if (unescape(line.substring(entry.valueStart())).equals(text)) {
             return new Applied(false);
         }
-        lines.set(entry.line(), line.substring(0, entry.valueStart()) + escape(text, false));
+        // A key alone on its line has no separator yet: "key" + "value" would rename the key.
+        String prefix = entry.valueStart() == entry.keyEnd() ? line.substring(0, entry.keyEnd()) + "=" : line.substring(0, entry.valueStart());
+        lines.set(entry.line(), prefix + escape(text, false));
         return new Applied(true);
     }
 
@@ -94,7 +96,7 @@ final class PropertiesFile {
             if (valueStart < line.length() && (line.charAt(valueStart) == '=' || line.charAt(valueStart) == ':')) {
                 valueStart = skipWhitespace(line, valueStart + 1);
             }
-            entries.add(new Entry(i, unescape(line.substring(start, end)), valueStart, continuation));
+            entries.add(new Entry(i, unescape(line.substring(start, end)), end, valueStart, continuation));
         }
         return entries;
     }
