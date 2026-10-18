@@ -135,8 +135,8 @@ is resolved against the server root.
 
 After applying, every file matching a `scan` glob and no `exclude` glob is checked. Globs are
 relative to the server root: `*` matches within a directory, `**` across directories, `**/` zero
-or more directories (`plugins/X/**/*.yml` matches `plugins/X/config.yml`), and `{a,b}` either
-alternative. The overlay and the secrets file are never scanned.
+or more directories (`plugins/X/**/*.yml` matches `plugins/X/config.yml`), `?` one character,
+`[a-z]` / `[!a-z]` a character class, and `{a,b}` either alternative. The overlay and the secrets file are never scanned.
 
 The scan fails closed. Anything it cannot inspect is an error, not a skip: tell it explicitly with
 `exclude`.
@@ -157,7 +157,9 @@ The rules:
   - the value after each line's first `=` or `:`.
 
   Files in a supported format are also parsed, and every key and scalar value is checked. HOCON
-  files are parsed without resolving substitutions. A file that fails to parse is still checked
+  files are parsed without resolving substitutions. Their quoted strings are also decoded from
+  the text and checked, together with each run of concatenated values minus its substitutions,
+  so `"prod-secret"${suffix}` is still caught. YAML keys repeated in a file are all checked. A file that fails to parse is still checked
   line by line.
 
 A match is reported with its file, line, rule and key path, never with the value (a matching
