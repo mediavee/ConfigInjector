@@ -48,7 +48,7 @@ final class Applier {
             }
             Optional<PlannedWrite> write = switch (edit) {
                 case RawFile raw -> planRaw(raw, placeholders, problems);
-                case Edits edits -> planEdits(edits, placeholders, problems);
+                case Edits edits -> planEdits(edits, root.relativize(edits.path()), overlay.forbidden(), placeholders, problems);
             };
             write.ifPresent(writes::add);
         }
@@ -134,7 +134,8 @@ final class Applier {
         return Optional.of(new PlannedWrite(raw.name(), raw.path(), original, content));
     }
 
-    private static Optional<PlannedWrite> planEdits(Edits edits, Placeholders placeholders, List<String> problems) {
+    private static Optional<PlannedWrite> planEdits(Edits edits, Path relative, Overlay.Forbidden forbidden, Placeholders placeholders,
+                                                    List<String> problems) {
         String name = edits.name();
         if (!Files.isRegularFile(edits.path(), LinkOption.NOFOLLOW_LINKS)) {
             problems.add(name + ": file not found");
@@ -163,6 +164,7 @@ final class Applier {
 
         int before = problems.size();
         boolean changed = false;
+        List<Splice.Edit> applied = new ArrayList<>();
         for (Assignment assignment : edits.assignments()) {
             String where = name + ": " + assignment.path() + ": ";
             List<String> missing = new ArrayList<>();
@@ -172,17 +174,24 @@ final class Applier {
                 continue;
             }
             Tree.Result result;
+            ConfigPath path = null;
             if (properties != null) {
                 result = properties.set(assignment.path(), value, assignment.create());
             } else {
                 try {
-                    result = Tree.set(tree, ConfigPath.parse(assignment.path()), value, assignment.create());
+                    path = ConfigPath.parse(assignment.path());
+                    result = Tree.set(tree, path, value, assignment.create());
                 } catch (IllegalArgumentException e) {
                     result = new Failed(e.getMessage());
                 }
             }
             switch (result) {
-                case Applied(boolean valueChanged) -> changed |= valueChanged;
+                case Applied(boolean valueChanged) -> {
+                    changed |= valueChanged;
+                    if (valueChanged && path != null) {
+                        applied.add(new Splice.Edit(path, value));
+                    }
+                }
                 case Failed(String reason) -> problems.add(where + reason);
             }
         }
@@ -191,7 +200,15 @@ final class Applier {
         }
         String content;
         try {
-            content = properties != null ? properties.text() : edits.format().write(tree);
+            if (properties != null) {
+                content = properties.text();
+            } else {
+                Object edited = tree;
+                // A kept comment may hold a production value; the whole rewrite drops comments.
+                content = Splice.apply(edits.format(), original, applied, edited)
+                        .filter(text -> !ForbiddenScanner.flags(forbidden, relative, text))
+                        .orElseGet(() -> edits.format().write(edited));
+            }
         } catch (RuntimeException e) {
             // Writer messages may quote values; the exception type is enough to locate the edit.
             problems.add(name + ": cannot write as " + edits.format() + " (" + e.getClass().getSimpleName() + ")");

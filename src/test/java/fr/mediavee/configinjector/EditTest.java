@@ -134,7 +134,74 @@ class EditTest {
     void jsonNumbersKeepTheirExactValue() throws IOException {
         fixture = OverlayFixture.in(temp).file("data.json", "{\"id\": 9223372036854775809, \"ratio\": 0.10000000000000000001, \"port\": 1}");
         assertEquals(List.of(), fixture.apply("files:\n  data.json:\n    - {path: port, value: 2}\n").problems());
-        assertEquals("{\n  \"id\": 9223372036854775809,\n  \"ratio\": 0.10000000000000000001,\n  \"port\": 2\n}\n", fixture.read("data.json"));
+        assertEquals("{\"id\": 9223372036854775809, \"ratio\": 0.10000000000000000001, \"port\": 2}", fixture.read("data.json"));
+    }
+
+    @Test
+    void yamlKeepsEverythingButTheEditedValues() throws IOException {
+        fixture = OverlayFixture.in(temp).file("config.yml", """
+                # Database settings
+                database:
+                  host: "prod.example"   # the main host
+                  port: 3306
+
+                  # Credentials
+                  password: 'prod secret ✨'
+                tokens:
+                  - prod-a
+                  - prod-b
+                # trailing comment
+                """);
+        Outcome outcome = fixture.apply("""
+                files:
+                  config.yml:
+                    - {path: database.host, value: "172.18.0.1"}
+                    - {path: database.port, value: 30200}
+                    - {path: database.password, value: dev}
+                    - {path: tokens, value: [dev]}
+                """);
+        assertEquals(List.of(), outcome.problems());
+        assertEquals("""
+                # Database settings
+                database:
+                  host: "172.18.0.1"   # the main host
+                  port: 30200
+
+                  # Credentials
+                  password: 'dev'
+                tokens: [dev]
+                # trailing comment
+                """, fixture.read("config.yml"));
+    }
+
+    @Test
+    void aForbiddenValueInAKeptCommentRewritesTheFileWhole() throws IOException {
+        fixture = OverlayFixture.in(temp).file("webhooks.yml", "# old: 'https://prod.example/hook'\nwebhook: 'https://prod.example/hook'\n");
+        Outcome outcome = fixture.apply("""
+                forbidden:
+                  contains: [prod.example]
+                files:
+                  webhooks.yml:
+                    - {path: webhook, blank: true}
+                """);
+        assertEquals(List.of(), outcome.problems());
+        assertEquals("webhook: ''\n", fixture.read("webhooks.yml"));
+    }
+
+    @Test
+    void anAnchoredValueIsRewrittenWhole() throws IOException {
+        fixture = OverlayFixture.in(temp).file("config.yml", "base: &db {host: prod}\nother: *db\n");
+        assertEquals(List.of(), fixture.apply("files:\n  config.yml:\n    - {path: base.host, value: dev}\n").problems());
+        Map<?, ?> tree = (Map<?, ?>) Format.YAML.parse(fixture.read("config.yml"));
+        assertEquals("dev", ((Map<?, ?>) tree.get("base")).get("host"));
+        assertEquals("dev", ((Map<?, ?>) tree.get("other")).get("host"));
+    }
+
+    @Test
+    void jsonKeepsItsIndentation() throws IOException {
+        fixture = OverlayFixture.in(temp).file("config.json", "{\n    \"name\": \"prod\",\n    \"hooks\": [\"a\"],\n    \"port\": 1\n}\n");
+        assertEquals(List.of(), fixture.apply("files:\n  config.json:\n    - {path: name, value: dev}\n    - {path: hooks, value: []}\n").problems());
+        assertEquals("{\n    \"name\": \"dev\",\n    \"hooks\": [],\n    \"port\": 1\n}\n", fixture.read("config.json"));
     }
 
     @Test

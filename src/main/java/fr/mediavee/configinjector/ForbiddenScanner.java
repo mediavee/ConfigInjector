@@ -183,6 +183,16 @@ final class ForbiddenScanner {
         return scanned[0];
     }
 
+    /** Whether {@code text}, as the content of {@code relative}, holds a forbidden value. */
+    static boolean flags(Forbidden rules, Path relative, String text) {
+        if (rules.isEmpty()) {
+            return false;
+        }
+        ForbiddenScanner scanner = new ForbiddenScanner(rules);
+        scanner.scanFile(relative, text.getBytes(StandardCharsets.UTF_8));
+        return !scanner.hits.isEmpty();
+    }
+
     private void scanFile(Path relative, byte[] bytes) {
         String text = decode(bytes);
         // Single-value files such as forwarding.secret are hashed whole, exactly and trimmed.
