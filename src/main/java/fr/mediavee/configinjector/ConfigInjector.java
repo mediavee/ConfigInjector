@@ -1,118 +1,117 @@
 package fr.mediavee.configinjector;
 
-import fr.mediavee.configinjector.exception.MissingRequiredVariableException;
-import fr.mediavee.configinjector.processor.FileProcessor;
-import fr.mediavee.configinjector.processor.FileProcessorFactory;
-import fr.mediavee.configinjector.processor.AbstractFileProcessor.RequiredVariableValidator;
-import fr.mediavee.configinjector.resolver.impl.CompositeVariableResolver;
-import fr.mediavee.configinjector.resolver.impl.EnvironmentFileResolver;
-import fr.mediavee.configinjector.resolver.impl.SystemVariableResolver;
-import fr.mediavee.configinjector.resolver.VariableResolver;
-import org.bukkit.plugin.java.JavaPlugin;
-
-import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.lang.instrument.Instrumentation;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.logging.Level;
+import java.util.Set;
 
-public final class ConfigInjector extends JavaPlugin {
+/**
+ * Applies a development overlay to a server's configuration files, then fails if production
+ * values remain. Runs as a Java agent, before the server reads any file, or from the command line.
+ */
+public final class ConfigInjector {
 
-    private final boolean stopOnMissingRequired;
-    private final boolean stopOnError;
+    static final int OK = 0;
+    static final int FAILED = 1;
+    static final int USAGE = 2;
 
-    public ConfigInjector() {
-        super();
+    enum Mode { APPLY, CHECK }
 
-        saveDefaultConfig();
+    record Outcome(List<String> problems, int written, int scanned) {
+    }
 
-        this.stopOnMissingRequired = getConfig().getBoolean("stop-on-missing-required", true);
-        this.stopOnError = getConfig().getBoolean("stop-on-error", false);
+    private static final String USAGE_TEXT = """
+            usage: java -jar configinjector.jar apply <overlay.yml> [--dir <server root>]
+                   java -jar configinjector.jar check <overlay.yml> [--dir <server root>]
+                   java -javaagent:configinjector.jar=<overlay.yml> -jar server.jar""";
 
+    private ConfigInjector() {
+    }
+
+    public static void premain(String args, Instrumentation instrumentation) {
+        if (args == null || args.isBlank()) {
+            System.err.println("configinjector: missing overlay path, use -javaagent:configinjector.jar=<overlay.yml>");
+            System.exit(FAILED);
+        }
+        int code = runAndReport(Path.of(args.strip()), Path.of(""), Mode.APPLY, System.out, System.err, "server start aborted");
+        if (code != OK) {
+            // The server's main must never run on a half-configured or still-production setup.
+            System.exit(code);
+        }
+    }
+
+    public static void main(String[] args) {
+        System.exit(cli(args, System.out, System.err));
+    }
+
+    static int cli(String[] args, PrintStream out, PrintStream err) {
+        if (args.length != 2 && !(args.length == 4 && args[2].equals("--dir"))) {
+            err.println(USAGE_TEXT);
+            return USAGE;
+        }
+        Mode mode = switch (args[0]) {
+            case "apply" -> Mode.APPLY;
+            case "check" -> Mode.CHECK;
+            default -> null;
+        };
+        if (mode == null) {
+            err.println(USAGE_TEXT);
+            return USAGE;
+        }
+        Path root = Path.of(args.length == 4 ? args[3] : "");
+        return runAndReport(Path.of(args[1]), root, mode, out, err, mode == Mode.APPLY ? "apply failed" : "check failed");
+    }
+
+    private static int runAndReport(Path overlay, Path root, Mode mode, PrintStream out, PrintStream err, String failure) {
+        Outcome outcome;
         try {
-            processConfigReplacements();
-        } catch (MissingRequiredVariableException e) {
-            handleError("Missing required variables: " + e.getMissingVariables(), e, stopOnMissingRequired);
-        } catch (FileNotFoundException e) {
-            handleError("Configuration file not found", e, stopOnError);
-        } catch (IllegalArgumentException e) {
-            handleError("Invalid configuration format", e, stopOnError);
-        } catch (IOException e) {
-            handleError("I/O error during configuration processing", e, stopOnError);
-        } catch (Exception e) {
-            handleError("Unexpected error during configuration processing", e, stopOnError);
+            outcome = run(overlay, root, mode, System.getenv());
+        } catch (IOException | RuntimeException e) {
+            outcome = new Outcome(List.of("unexpected error: " + e), 0, 0);
         }
+        if (outcome.problems().isEmpty()) {
+            String written = mode == Mode.APPLY ? outcome.written() + " file(s) written, " : "";
+            out.println("configinjector: overlay OK, " + written + outcome.scanned() + " file(s) scanned for forbidden values");
+            return OK;
+        }
+        outcome.problems().forEach(problem -> err.println("configinjector: " + problem));
+        err.println("configinjector: " + outcome.problems().size() + " problem(s), " + failure);
+        return FAILED;
     }
 
-    private void handleError(String message, Exception e, boolean shouldStop) {
-        getLogger().log(Level.SEVERE, message, e);
-        if (shouldStop) {
-            getLogger().severe("Stopping server due to: " + message);
-            System.exit(1);
+    static Outcome run(Path overlayFile, Path root, Mode mode, Map<String, String> environment) throws IOException {
+        List<String> problems = new ArrayList<>();
+        if (!Files.isDirectory(root)) {
+            return new Outcome(List.of("server root " + root.toAbsolutePath() + " is not a directory"), 0, 0);
         }
-    }
-
-    private void processConfigReplacements() throws IOException {
-        Map<String, Object> config = getConfig().getValues(false);
-        List<Map<String, Object>> replacements = (List<Map<String, Object>>) config.get("replacements");
-        
-        if (replacements == null) {
-            return;
+        Path realRoot = root.toRealPath();
+        Path overlayPath = overlayFile.toAbsolutePath().normalize();
+        Overlay overlay = Overlay.load(overlayPath, realRoot, problems);
+        Placeholders placeholders = Placeholders.load(overlay.secrets(), environment, problems);
+        List<Applier.PlannedWrite> writes = Applier.plan(realRoot, overlay, placeholders, problems);
+        if (!problems.isEmpty()) {
+            return new Outcome(problems, 0, 0);
         }
-
-        String envFile = getConfig().getString("env-file", ".env");
-        Path envFilePath = getServer().getWorldContainer().toPath().resolve(envFile);
-        VariableResolver resolver = new CompositeVariableResolver(
-            new SystemVariableResolver(),
-            new EnvironmentFileResolver(envFilePath)
-        );
-
-        boolean stopOnMissingRequired = getConfig().getBoolean("stop-on-missing-required", true);
-        List<String> missingVariables = new ArrayList<>();
-        RequiredVariableValidator validator = new RequiredVariableValidator(stopOnMissingRequired, missingVariables);
-
-        int processedFiles = 0;
-        int modifiedFiles = 0;
-
-        for (Map<String, Object> replacement : replacements) {
-            String filePath = (String) replacement.get("file");
-            List<Map<String, Object>> changes = (List<Map<String, Object>>) replacement.get("changes");
-            
-            if (processFileReplacements(filePath, changes, validator, resolver)) {
-                modifiedFiles++;
+        if (mode == Mode.APPLY) {
+            Applier.write(writes, problems);
+            if (!problems.isEmpty()) {
+                return new Outcome(problems, 0, 0);
             }
-            processedFiles++;
         }
 
-        if (!missingVariables.isEmpty()) {
-            throw new MissingRequiredVariableException(missingVariables);
+        // The overlay and the secrets file legitimately hold the forbidden substrings and dev secrets.
+        Set<Path> ignored = new HashSet<>();
+        ignored.add(overlayPath.toRealPath());
+        if (overlay.secrets().isPresent()) {
+            ignored.add(overlay.secrets().get().toRealPath());
         }
-
-        getLogger().info(String.format("Processed %d files, modified %d files", processedFiles, modifiedFiles));
-    }
-    
-
-    private boolean processFileReplacements(String filePath, List<Map<String, Object>> changes) throws IOException {
-        return processFileReplacements(filePath, changes, null);
-    }
-    
-    private boolean processFileReplacements(String filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator) throws IOException {
-        return processFileReplacements(filePath, changes, validator, new SystemVariableResolver());
-    }
-    
-    private boolean processFileReplacements(String filePath, List<Map<String, Object>> changes, RequiredVariableValidator validator, VariableResolver resolver) throws IOException {
-        Path serverRoot = getServer().getWorldContainer().toPath();
-        Path fullPath = serverRoot.resolve(filePath);
-        
-        if (!Files.exists(fullPath)) {
-            throw new FileNotFoundException("Configuration file not found: " + fullPath);
-        }
-
-        FileProcessor processor = FileProcessorFactory.getProcessor(filePath);
-
-        return processor.processFile(fullPath, changes, validator, resolver);
+        int scanned = ForbiddenScanner.scan(realRoot, overlay.forbidden(), ignored, problems);
+        return new Outcome(problems, mode == Mode.APPLY ? writes.size() : 0, scanned);
     }
 }
