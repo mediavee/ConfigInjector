@@ -102,8 +102,12 @@ is, or sits under, a symlink is refused.
 
 What a rewrite keeps:
 
-- YAML, JSON and HOCON files are re-serialized: comments are lost and HOCON keys are sorted.
-  HOCON substitutions are resolved, as Configurate does when a plugin saves its config.
+- YAML and JSON files keep every character except the edited values, written in place on one
+  line (a list or map becomes flow style: `tokens: [dev]`). The file is re-serialized instead, and
+  loses its comments, when an edit cannot be written in place (a created key, an anchored value, a
+  duplicated key) or when a kept comment holds a forbidden value.
+- HOCON files are re-serialized: comments are lost, keys are sorted and substitutions are
+  resolved, as Configurate does when a plugin saves its config.
 - TOML keeps its comments.
 - `.properties` files keep every line except the edited ones, in place.
 - JSON numbers keep their exact source text.
