@@ -5,6 +5,7 @@ import java.io.PrintStream;
 import java.lang.instrument.Instrumentation;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -23,8 +24,18 @@ public final class ConfigInjector {
 
     enum Mode { APPLY, CHECK }
 
-    record Outcome(List<String> problems, int written, int scanned) {
+    record Outcome(List<String> problems, int written, ForbiddenScanner.Result scan) {
+
+        Outcome(List<String> problems) {
+            this(problems, 0, NO_SCAN);
+        }
+
+        int scanned() {
+            return scan.scanned();
+        }
     }
+
+    private static final ForbiddenScanner.Result NO_SCAN = new ForbiddenScanner.Result(0, Duration.ZERO, List.of());
 
     private static final String USAGE_TEXT = """
             usage: java -jar configinjector.jar apply <overlay.yml> [--dir <server root>]
@@ -73,7 +84,13 @@ public final class ConfigInjector {
         try {
             outcome = run(overlay, root, mode, System.getenv());
         } catch (IOException | RuntimeException e) {
-            outcome = new Outcome(List.of("unexpected error: " + e), 0, 0);
+            outcome = new Outcome(List.of("unexpected error: " + e));
+        }
+        if (!outcome.scan().heaviest().isEmpty()) {
+            out.println("configinjector: warning: scanning " + outcome.scanned() + " file(s) took "
+                    + outcome.scan().elapsed().toMillis() + " ms; folders with the most scanned files,"
+                    + " to add to forbidden.exclude if they hold no configuration:");
+            outcome.scan().heaviest().forEach(folder -> out.println("configinjector:   " + folder));
         }
         if (outcome.problems().isEmpty()) {
             String written = mode == Mode.APPLY ? outcome.written() + " file(s) written, " : "";
@@ -88,7 +105,7 @@ public final class ConfigInjector {
     static Outcome run(Path overlayFile, Path root, Mode mode, Map<String, String> environment) throws IOException {
         List<String> problems = new ArrayList<>();
         if (!Files.isDirectory(root)) {
-            return new Outcome(List.of("server root " + root.toAbsolutePath() + " is not a directory"), 0, 0);
+            return new Outcome(List.of("server root " + root.toAbsolutePath() + " is not a directory"));
         }
         Path realRoot = root.toRealPath();
         Path overlayPath = overlayFile.toAbsolutePath().normalize();
@@ -96,12 +113,12 @@ public final class ConfigInjector {
         Placeholders placeholders = Placeholders.load(overlay.secrets(), environment, problems);
         List<Applier.PlannedWrite> writes = Applier.plan(realRoot, overlay, placeholders, problems);
         if (!problems.isEmpty()) {
-            return new Outcome(problems, 0, 0);
+            return new Outcome(problems);
         }
         if (mode == Mode.APPLY) {
             Applier.write(writes, problems);
             if (!problems.isEmpty()) {
-                return new Outcome(problems, 0, 0);
+                return new Outcome(problems);
             }
         }
 
@@ -111,7 +128,7 @@ public final class ConfigInjector {
         if (overlay.secrets().isPresent()) {
             ignored.add(overlay.secrets().get().toRealPath());
         }
-        int scanned = ForbiddenScanner.scan(realRoot, overlay.forbidden(), ignored, problems);
-        return new Outcome(problems, mode == Mode.APPLY ? writes.size() : 0, scanned);
+        ForbiddenScanner.Result scan = ForbiddenScanner.scan(realRoot, overlay.forbidden(), ignored, problems);
+        return new Outcome(problems, mode == Mode.APPLY ? writes.size() : 0, scan);
     }
 }
