@@ -175,6 +175,15 @@ configinjector: plugins/LiteBans/config.yml:12: value matches forbidden.sha256[0
 
 To compute a hash: `printf '%s' 'the-prod-value' | sha256sum`.
 
+Files are scanned in parallel; reports keep the walk order. A scan of more than 20,000 files, or
+longer than 5 seconds, prints a warning (not an error) naming the folders that hold most of the
+scanned files, so that player data and other non-configuration folders can be added to `exclude`:
+
+```
+configinjector: warning: scanning 253696 file(s) took 29512 ms; folders with the most scanned files, to add to forbidden.exclude if they hold no configuration:
+configinjector:   plugins/ajLeaderboards/past-resets: 85942
+```
+
 If `sha256` and `contains` are both empty, no scan runs. Defaults for `scan` and `exclude` are the
 values shown above.
 

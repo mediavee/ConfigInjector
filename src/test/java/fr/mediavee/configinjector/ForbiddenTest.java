@@ -13,9 +13,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -195,6 +198,42 @@ class ForbiddenTest {
                 "plugins/X/config.yml: symlink not allowed in the scanned tree, exclude it explicitly",
                 "plugins/linked: symlink not allowed in the scanned tree, exclude it explicitly"
         ), fixture.run(overlay(), Mode.CHECK, Map.of()).problems().stream().sorted().toList());
+    }
+
+    @Test
+    void reportsHitsInWalkOrderWhateverThreadScannedThem() throws IOException {
+        OverlayFixture fixture = OverlayFixture.in(temp);
+        for (int i = 0; i < 200; i++) {
+            fixture.file("plugins/P%03d/config.yml".formatted(i), "host: " + PROD_HOST + "\nok: 1\npassword: " + PROD_PASSWORD + "\n");
+        }
+        List<String> first = fixture.run(overlay(), Mode.CHECK, Map.of()).problems();
+        assertEquals(400, first.size());
+        for (int i = 0; i < first.size(); i += 2) {
+            String file = first.get(i).substring(0, first.get(i).indexOf(':'));
+            assertTrue(first.get(i).startsWith(file + ":1: "), first.get(i));
+            assertTrue(first.get(i + 1).startsWith(file + ":3: "), first.get(i + 1));
+        }
+        assertEquals(first, fixture.run(overlay(), Mode.CHECK, Map.of()).problems());
+    }
+
+    @Test
+    void aHeavyScanNamesTheFoldersWithTheMostFiles() throws IOException {
+        OverlayFixture fixture = OverlayFixture.in(temp)
+                .file("plugins/A/players/1.yml", "a: 1\n")
+                .file("plugins/A/players/2.yml", "a: 1\n")
+                .file("plugins/A/players/3.yml", "a: 1\n")
+                .file("plugins/B/config.yml", "a: 1\n")
+                .file("config.yml", "a: 1\n");
+        Overlay.Forbidden rules = new Overlay.Forbidden(List.of(), List.of(PROD_HOST), List.of("**/*.yml"), List.of(), 1 << 20);
+        List<String> problems = new ArrayList<>();
+
+        ForbiddenScanner.Result light = ForbiddenScanner.scan(fixture.root(), rules, Set.of(), problems, 5, Duration.ofMinutes(1));
+        assertEquals(5, light.scanned());
+        assertEquals(List.of(), light.heaviest());
+
+        ForbiddenScanner.Result heavy = ForbiddenScanner.scan(fixture.root(), rules, Set.of(), problems, 4, Duration.ofMinutes(1));
+        assertEquals(List.of("plugins/A/players: 3", "plugins/B: 1"), heavy.heaviest());
+        assertEquals(List.of(), problems);
     }
 
     private static String overlay() {

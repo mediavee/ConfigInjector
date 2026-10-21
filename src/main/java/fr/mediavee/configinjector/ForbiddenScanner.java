@@ -12,7 +12,10 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -20,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.IntSupplier;
 import java.util.regex.Pattern;
 
 /**
@@ -102,22 +106,29 @@ final class ForbiddenScanner {
             return directory.map(d -> d.matcher(slashes(relative)).matches()).orElse(false);
         }
 
-        private static String slashes(Path relative) {
+        static String slashes(Path relative) {
             return relative.toString().replace(relative.getFileSystem().getSeparator(), "/");
         }
     }
 
+    /** A scan this large is worth a warning naming the folders that make it so. */
+    private static final int HEAVY_FILES = 20_000;
+    private static final Duration HEAVY_TIME = Duration.ofSeconds(5);
+    private static final int HEAVIEST_SHOWN = 10;
+
+    /** {@code heaviest} is empty unless the scan was heavy. */
+    record Result(int scanned, Duration elapsed, List<String> heaviest) {
+    }
+
     private final Forbidden rules;
-    private final Map<String, Integer> hashIndex = new LinkedHashMap<>();
+    private final Map<String, Integer> hashIndex;
     private final Map<String, String> hits = new LinkedHashMap<>();
     private final MessageDigest sha256;
     private int hitCount;
 
-    private ForbiddenScanner(Forbidden rules) {
+    private ForbiddenScanner(Forbidden rules, Map<String, Integer> hashIndex) {
         this.rules = rules;
-        for (int i = 0; i < rules.sha256().size(); i++) {
-            hashIndex.putIfAbsent(rules.sha256().get(i), i);
-        }
+        this.hashIndex = hashIndex;
         try {
             sha256 = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
@@ -125,15 +136,31 @@ final class ForbiddenScanner {
         }
     }
 
-    /** Scans {@code root}, skipping {@code ignored} files; returns the number of files scanned. */
-    static int scan(Path root, Forbidden rules, Set<Path> ignored, List<String> problems) {
-        if (rules.isEmpty()) {
-            return 0;
+    private static Map<String, Integer> hashIndex(Forbidden rules) {
+        Map<String, Integer> index = new HashMap<>();
+        for (int i = 0; i < rules.sha256().size(); i++) {
+            index.putIfAbsent(rules.sha256().get(i), i);
         }
-        ForbiddenScanner scanner = new ForbiddenScanner(rules);
+        return Map.copyOf(index);
+    }
+
+    /**
+     * Scans {@code root}, skipping {@code ignored} files. The walk lists the files in order, then
+     * their contents are scanned in parallel, one scanner per file; reports keep the walk order.
+     */
+    static Result scan(Path root, Forbidden rules, Set<Path> ignored, List<String> problems) {
+        return scan(root, rules, ignored, problems, HEAVY_FILES, HEAVY_TIME);
+    }
+
+    static Result scan(Path root, Forbidden rules, Set<Path> ignored, List<String> problems, int heavyFiles, Duration heavyTime) {
+        if (rules.isEmpty()) {
+            return new Result(0, Duration.ZERO, List.of());
+        }
+        long start = System.nanoTime();
+        Map<String, Integer> hashIndex = hashIndex(rules);
         List<Glob> include = rules.scan().stream().map(Glob::of).toList();
         List<Glob> exclude = rules.exclude().stream().map(Glob::of).toList();
-        int[] scanned = {0};
+        List<Path> files = new ArrayList<>();
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
@@ -164,8 +191,7 @@ final class ForbiddenScanner {
                         problems.add(relative + ": larger than forbidden.max-file-size (" + attributes.size()
                                 + " bytes), exclude it explicitly or raise the limit");
                     } else {
-                        scanner.scanFile(relative, Files.readAllBytes(file));
-                        scanned[0]++;
+                        files.add(relative);
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -178,9 +204,53 @@ final class ForbiddenScanner {
             });
         } catch (IOException e) {
             problems.add("scan of " + root + " failed: " + e);
+            return new Result(0, Duration.ofNanos(System.nanoTime() - start), List.of());
         }
-        problems.addAll(scanner.hits.values());
-        return scanned[0];
+        List<List<String>> reports = files.parallelStream().map(relative -> {
+            ForbiddenScanner scanner = new ForbiddenScanner(rules, hashIndex);
+            try {
+                scanner.scanFile(relative, Files.readAllBytes(root.resolve(relative)));
+            } catch (IOException e) {
+                return List.of(relative + ": cannot scan: " + e);
+            }
+            return List.copyOf(scanner.hits.values());
+        }).toList();
+        reports.forEach(problems::addAll);
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+        boolean heavy = files.size() > heavyFiles || elapsed.compareTo(heavyTime) > 0;
+        return new Result(files.size(), elapsed, heavy ? heaviest(files) : List.of());
+    }
+
+    /**
+     * The folders holding the most scanned files, as {@code folder: count}. A folder is named where
+     * its files spread out: one with a subfolder holding half of them or more yields to it, so data
+     * sharded into many small subfolders is named once, by the folder above them. Folders under 1% of
+     * the scan are left out.
+     */
+    private static List<String> heaviest(List<Path> files) {
+        Map<Path, Integer> counts = new HashMap<>();
+        for (Path file : files) {
+            for (Path folder = file.getParent(); folder != null; folder = folder.getParent()) {
+                counts.merge(folder, 1, Integer::sum);
+            }
+        }
+        Map<Path, Integer> largestChild = new HashMap<>();
+        counts.forEach((folder, count) -> {
+            if (folder.getParent() != null) {
+                largestChild.merge(folder.getParent(), count, Math::max);
+            }
+        });
+        List<Path> named = new ArrayList<>();
+        counts.keySet().stream()
+                .filter(folder -> largestChild.getOrDefault(folder, 0) * 2 < counts.get(folder))
+                .filter(folder -> counts.get(folder) * 100 >= files.size())
+                .sorted(Comparator.comparing((Path folder) -> -counts.get(folder)).thenComparing(Glob::slashes))
+                .forEach(folder -> {
+                    if (named.size() < HEAVIEST_SHOWN && named.stream().noneMatch(folder::startsWith)) {
+                        named.add(folder);
+                    }
+                });
+        return named.stream().map(folder -> Glob.slashes(folder) + ": " + counts.get(folder)).toList();
     }
 
     /** Whether {@code text}, as the content of {@code relative}, holds a forbidden value. */
@@ -188,7 +258,7 @@ final class ForbiddenScanner {
         if (rules.isEmpty()) {
             return false;
         }
-        ForbiddenScanner scanner = new ForbiddenScanner(rules);
+        ForbiddenScanner scanner = new ForbiddenScanner(rules, hashIndex(rules));
         scanner.scanFile(relative, text.getBytes(StandardCharsets.UTF_8));
         return !scanner.hits.isEmpty();
     }
@@ -196,18 +266,19 @@ final class ForbiddenScanner {
     private void scanFile(Path relative, byte[] bytes) {
         String text = decode(bytes);
         // Single-value files such as forwarding.secret are hashed whole, exactly and trimmed.
-        checkHash(relative, 1, candidates(text), null);
+        checkHash(relative, () -> 1, candidates(text), null);
         String[] lines = text.split("\r\n|\r|\n", -1);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
-            checkContains(relative, i + 1, line, null);
+            int number = i + 1;
+            checkContains(relative, () -> number, line, null);
             Set<String> candidates = candidates(line);
             int separator = firstSeparator(line);
             if (separator >= 0) {
                 candidates.addAll(candidates(line.substring(0, separator)));
                 candidates.addAll(candidates(line.substring(separator + 1)));
             }
-            checkHash(relative, i + 1, candidates, null);
+            checkHash(relative, () -> number, candidates, null);
         }
         Optional<Format> format = Format.byExtension(relative);
         if (format.isEmpty()) {
@@ -215,8 +286,8 @@ final class ForbiddenScanner {
         }
         if (format.get() == Format.HOCON) {
             hoconLiterals(text).forEach(literal -> {
-                checkContains(relative, literal.line(), literal.text(), null);
-                checkHash(relative, literal.line(), candidates(literal.text()), null);
+                checkContains(relative, literal::line, literal.text(), null);
+                checkHash(relative, literal::line, candidates(literal.text()), null);
             });
         }
         Object tree;
@@ -361,7 +432,7 @@ final class ForbiddenScanner {
                 String key;
                 if (entry.getKey() instanceof Format.YamlScalar(String value, int line)) {
                     key = value;
-                    forbidden = checkScalar(relative, line, value, detail);
+                    forbidden = checkScalar(relative, () -> line, value, detail);
                 } else {
                     key = "<complex key>";
                     walk(relative, lines, entry.getKey(), path);
@@ -370,24 +441,25 @@ final class ForbiddenScanner {
                 String segment = forbidden ? "<forbidden key>" : key;
                 walk(relative, lines, entry.getValue(), path.isEmpty() ? segment : path + "." + segment);
             });
-            case Format.YamlScalar(String value, int line) -> checkScalar(relative, line, value, "at " + path);
+            case Format.YamlScalar(String value, int line) -> checkScalar(relative, () -> line, value, "at " + path);
             case Object scalar -> checkScalar(relative, lines, String.valueOf(scalar), "at " + path);
         }
     }
 
     /** Returns whether {@code value} matched a rule. */
     private boolean checkScalar(Path relative, String[] lines, String value, String detail) {
-        return checkScalar(relative, lineOf(lines, value), value, detail);
+        // Looking the line up costs a pass over the file: only a hit needs it.
+        return checkScalar(relative, () -> lineOf(lines, value), value, detail);
     }
 
-    private boolean checkScalar(Path relative, int line, String value, String detail) {
+    private boolean checkScalar(Path relative, IntSupplier line, String value, String detail) {
         int before = hitCount;
         checkContains(relative, line, value, detail);
         checkHash(relative, line, candidates(value), detail);
         return hitCount > before;
     }
 
-    private void checkContains(Path relative, int line, String text, String detail) {
+    private void checkContains(Path relative, IntSupplier line, String text, String detail) {
         for (int i = 0; i < rules.contains().size(); i++) {
             if (text.contains(rules.contains().get(i))) {
                 hit(relative, line, "forbidden.contains[" + i + "]", detail);
@@ -395,7 +467,7 @@ final class ForbiddenScanner {
         }
     }
 
-    private void checkHash(Path relative, int line, Set<String> candidates, String detail) {
+    private void checkHash(Path relative, IntSupplier line, Set<String> candidates, String detail) {
         if (hashIndex.isEmpty()) {
             return;
         }
@@ -423,8 +495,9 @@ final class ForbiddenScanner {
     }
 
     /** {@code detail} locates the match inside a parsed document, or is null for a line match. */
-    private void hit(Path relative, int line, String rule, String detail) {
+    private void hit(Path relative, IntSupplier lineNumber, String rule, String detail) {
         hitCount++;
+        int line = lineNumber.getAsInt();
         String location = line > 0 ? relative + ":" + line : relative.toString();
         String key = location + " " + rule;
         if (detail == null) {
